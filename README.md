@@ -1,4 +1,8 @@
-# Wilbur
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.svg">
+  <img alt="wilbur" src="docs/assets/logo-light.svg" width="272" height="51">
+</picture>
 
 A local coding agent for the terminal — tools, subagents, a plan it keeps —
 driven entirely by models on your own GPU.
