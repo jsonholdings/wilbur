@@ -1,0 +1,110 @@
+{
+  "name": "wilbur-vscode",
+  "displayName": "Wilbur",
+  "description": "Run Wilbur, the local offline coding agent (Ollama + a local model), in a VS Code terminal panel.",
+  "version": "0.2.0",
+  "icon": "media/icon.png",
+  "publisher": "jsonholdings",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Machine Learning", "Chat", "Other"],
+  "keywords": ["ai", "coding agent", "ollama", "local llm", "offline", "wilbur", "assistant"],
+  "galleryBanner": {
+    "color": "#a8431c",
+    "theme": "dark"
+  },
+  "activationEvents": [
+    "onCommand:wilbur.open",
+    "onCommand:wilbur.askAboutSelection",
+    "onCommand:wilbur.sendCurrentFile",
+    "onView:wilburActivityView"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "wilbur.open",
+        "title": "Wilbur: Open",
+        "icon": "$(hubot)"
+      },
+      {
+        "command": "wilbur.askAboutSelection",
+        "title": "Wilbur: Ask about selection"
+      },
+      {
+        "command": "wilbur.sendCurrentFile",
+        "title": "Wilbur: Send current file"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "wilbur.askAboutSelection",
+          "when": "editorHasSelection",
+          "group": "9_wilbur"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "wilbur.open",
+          "when": "view == wilburActivityView",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "wilbur.askAboutSelection",
+        "key": "ctrl+alt+w",
+        "when": "editorTextFocus"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wilburActivityBar",
+          "title": "Wilbur",
+          "icon": "media/wilbur.svg"
+        }
+      ]
+    },
+    "views": {
+      "wilburActivityBar": [
+        {
+          "id": "wilburActivityView",
+          "name": "Wilbur"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Wilbur",
+      "properties": {
+        "wilbur.path": {
+          "type": "string",
+          "default": "wilbur",
+          "description": "Path to, or name on PATH of, the wilbur executable (evaluated on the host, not inside the VS Code sandbox). Leave as 'wilbur' if the wilbur CLI installer put it on your PATH; otherwise set an absolute path."
+        },
+        "wilbur.useFlatpakSpawn": {
+          "type": "string",
+          "enum": ["auto", "on", "off"],
+          "default": "auto",
+          "description": "Whether to prefix wilbur with 'flatpak-spawn --host' to escape the VS Code Flatpak sandbox. 'auto' detects the sandbox via /.flatpak-info."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jsonholdings/wilbur"
+  },
+  "homepage": "https://github.com/jsonholdings/wilbur",
+  "bugs": {
+    "url": "https://github.com/jsonholdings/wilbur/issues"
+  }
+}

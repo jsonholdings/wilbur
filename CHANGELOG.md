@@ -1,0 +1,84 @@
+# Changelog
+
+Earlier history lives in `git log`; this file starts at 2.4.0.
+
+## 2.8.0
+
+- The terminal look matches Claude Code's: prompt_toolkit replaces the
+  hand-rolled fd-level stdin pump on a real tty. Output scrolls above a
+  pinned input line with a bottom toolbar (spinner/status while a turn
+  runs, then model, tokens and running subagents). History persists under
+  `~/.config/wilbur/history`; Alt-Enter (Escape then Enter) inserts a
+  newline for multi-line input; `/`-commands tab-complete. Off a tty
+  (pipes, `WILBUR_NO_PTK=1`, or prompt_toolkit not installed) the old pump
+  is used unchanged. Typing during a turn still queues a command, approval
+  prompts still route through the same prompt, Ctrl-C still cancels a turn
+  or subagents, Ctrl-D still exits.
+- First-run model picker: if the configured model isn't installed, Wilbur
+  lists the installed tool-capable models with a VRAM fit mark for the
+  current GPU, lets you pick one, and saves it. If nothing tool-capable is
+  installed, it suggests an `ollama pull` sized to detected free VRAM. If
+  Ollama isn't reachable, it prints how to start it.
+- The shipped default model is now `qwen3:14b`, a mainstream tool-capable
+  model that a public release should work with out of the box.
+- License, notice and brand files added (`LICENSE`, `NOTICE`, `BRAND.md`)
+  ahead of the first public release.
+- VS Code extension bumped to 0.2.0: `wilbur.path` defaults to `wilbur`,
+  the `repository`/gallery fields point at the public
+  `github.com/jsonholdings/wilbur` repo, a gallery banner was added, and
+  the terminal tab now shows a full-colour Wilbur icon instead of the
+  generic terminal icon.
+- Each tool result shows its own elapsed time. `/help` is grouped into Model,
+  Turn, Session and Other sections instead of one flat list.
+- The GPU fit check now reads one card by index (`gpu_vram_mb(index)` /
+  `gpu_free_mb(index)`, backed by a new `all_gpu_vram_mb()`) instead of always
+  reading `nvidia-smi`'s first row regardless of which card Ollama would
+  place a model on. `Config.gpu_index` (default 0) names the target card,
+  ready for a second one.
+- The system prompt carries a short set of always-on operating rules
+  (verify and label claims, name explicit targets for destructive commands,
+  stage only changed files, test before committing) alongside the identity
+  lock, independent of persona.
+
+## VS Code extension (`vscode/`)
+
+A VS Code extension (own version, 0.2.0) that runs Wilbur in a terminal
+panel — the shape of Claude Code's own VS Code integration. Commands:
+`Wilbur: Open`, `Wilbur: Ask about selection` (`ctrl+alt+w`), `Wilbur: Send
+current file`. See `vscode/README.md` and `vscode/CHANGELOG.md`. Does not
+change the CLI's own version.
+
+## 2.5.1
+
+- Fix: text typed during a turn vanished as it was typed. The input pump
+  echoed each key and then paused the spinner, and pausing clears the line.
+  It now pauses once, before the first echoed key. Regression test drives a
+  real pty with the spinner active.
+
+## 2.5.0
+
+- Typing is visible while a turn is running: the stdin pump reads at the fd
+  level and switches a real terminal to cbreak mode so keystrokes echo as
+  they're typed instead of being held by the kernel until Enter. Verified
+  against a real pty, not just a pipe.
+- Subagents get their own tool-round budget (`subagent_max_turns`) instead of
+  inheriting the parent's `max_turns`.
+- `/agents` lists in-flight and recently finished subagents (role, status,
+  elapsed time, current tool). The spinner shows a one-line "(N subagents
+  running)" status while any are live.
+- Ctrl-C now reaches a running subagent: a cooperative cancel flag is checked
+  between tool rounds and before each tool call, so an interrupted subagent
+  stops instead of running unattended in the background.
+
+## 2.4.0
+
+- Hitting the tool-round limit no longer throws the turn's work away. Wilbur
+  makes one final no-tools model call asking what was done, what is left, and
+  the next concrete step, and shows that instead of the bare "stopped after
+  N rounds" notice. The transcript is untouched by that call.
+- `/continue` (or typing "continue") resumes a task with a fresh round budget
+  and the same context.
+- `/turns [n]` shows or sets the tool-round limit (`max_turns`) at runtime.
+- The system prompt now tells the model to split a long task into small,
+  numbered, independently-testable chunks and verify each one before moving
+  on.

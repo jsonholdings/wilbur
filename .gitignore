@@ -1,0 +1,7 @@
+node_modules/
+*.vsix
+__pycache__/
+*.pyc
+build/
+*.egg-info/
+.pytest_cache/

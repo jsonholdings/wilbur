@@ -1,0 +1,6 @@
+.gitignore
+SESSION-CLAIM.md
+node_modules/**
+BACKLOG.md
+test/**
+.vscodeignore
