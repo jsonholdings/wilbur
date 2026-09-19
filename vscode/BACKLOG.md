@@ -16,4 +16,16 @@ codicons in the diff editor's title bar wired to commands that either apply
 the edit (`vscode.workspace.applyEdit`) or discard it and tell Wilbur so via
 the same side channel.
 
-Not built now — out of v1 scope. Needs the Wilbur CLI side built first.
+Not built now — out of v1/0.3.0 scope. Needs the Wilbur CLI side built first
+(an opt-in `--edit-protocol` flag or env var that, before applying an
+edit_file/write_file, writes the proposed edit to a per-session inbox dir
+and waits for accept/reject; the CLI behaves exactly as before without the
+flag).
+
+## Chat sidebar webview (v2)
+
+A sidebar view (contributes.views) with a webview panel: an input box that
+sends lines into the Wilbur terminal and shows its status, with a strict
+CSP and no remote resources. Not built now — out of 0.3.0 scope. The
+status bar, sessions and diagnostics commands cover the near-term use
+cases; revisit once those have real usage.

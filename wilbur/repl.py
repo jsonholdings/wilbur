@@ -89,6 +89,7 @@ class Repl:
         self._input_q: "queue.Queue[str | None]" = queue.Queue()
         self._approval_q: "queue.Queue[str | None]" = queue.Queue()
         self._turn_active = threading.Event()
+        self._turn_hit_limit = False
         self._awaiting_approval = threading.Event()
         self._pump_thread: threading.Thread | None = None
 
@@ -500,6 +501,7 @@ class Repl:
                 f"compacted context: {data['before_tokens']:,} -> "
                 f"{data['after_tokens']:,} tokens"))
         elif kind == "limit":
+            self._turn_hit_limit = True
             print(ui.error(f"hit the {data['turns']}-round limit"))
         if kind == "message":
             # Persist after every transcript append, not only at turn end --
@@ -561,6 +563,7 @@ class Repl:
             spinner = ui.Spinner(status_fn=self._agents_status_line, render=not self._use_ptk)
             self._spinner = spinner
             self._turn_active.set()
+            self._turn_hit_limit = False
             try:
                 with spinner:
                     reply = self.agent.run(line)
@@ -581,6 +584,19 @@ class Repl:
                 print()
                 print(ui.assistant(reply))
             print()
+            if self._is_idle():
+                print(ui.signoff(self.config.idle_signoff_text))
+                print()
+
+    def _is_idle(self) -> bool:
+        """True only when the turn finished with nothing left in flight, so the
+        sign-off is an honest 'waiting on you' signal, never filler."""
+        if not getattr(self.config, "idle_signoff", True) or self._turn_hit_limit:
+            return False
+        if not self._input_q.empty():
+            return False
+        from .tools import agents_registry
+        return not agents_registry.running()
 
     # ---------------------------------------------------------------- #
 

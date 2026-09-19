@@ -2,6 +2,19 @@
 
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
+
+## 2.10.0
+
+- Idle sign-off: when a turn ends with nothing left in flight (no subagents running, nothing queued, no round
+  limit hit), Wilbur prints `THANK YOU FOR THE SLOP — MAY I HAVE ANOTHER?`. It comes from the REPL, not the
+  model, so it is an honest "waiting on you" signal. Configure with `idle_signoff` / `idle_signoff_text`.
+
+## 2.9.0
+
+- `--sessions --json` emits the session listing as machine-readable JSON
+  (id, cwd, updated, objective, turns), for the VS Code extension's
+  session picker instead of parsing the human-readable table.
+
 ## 2.8.0
 
 - The terminal look matches Claude Code's: prompt_toolkit replaces the

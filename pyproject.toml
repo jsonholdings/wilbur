@@ -1,6 +1,6 @@
 [project]
 name = "wilbur"
-version = "2.8.0"
+version = "2.10.0"
 description = "Local coding agent for the terminal, driven by Ollama models."
 requires-python = ">=3.10"
 dependencies = ["prompt_toolkit>=3.0.43"]

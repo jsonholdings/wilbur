@@ -103,6 +103,10 @@ def assistant(text: str) -> str:
     return text.strip()
 
 
+def signoff(text: str) -> str:
+    return c(text, BOLD, ACCENT)
+
+
 def notice(text: str) -> str:
     return c("  " + text, GREY)
 

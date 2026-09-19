@@ -5,6 +5,7 @@ const {
   isFlatpakSandbox,
   buildLaunchArgv,
   buildCheckArgv,
+  buildSessionsArgv,
   shellQuote,
 } = require("../src/sandbox");
 
@@ -93,6 +94,29 @@ test("buildCheckArgv: sandboxed prefixes flatpak-spawn --host", () => {
     "sh",
     "-c",
     "command -v '/abs/path/wilbur' >/dev/null 2>&1",
+  ]);
+});
+
+test("buildSessionsArgv: not sandboxed returns plain wilbur --sessions --json argv", () => {
+  const argv = buildSessionsArgv({
+    wilburPath: "wilbur",
+    useFlatpakSpawn: "off",
+  });
+  assert.deepEqual(argv, ["wilbur", "--sessions", "--json"]);
+});
+
+test("buildSessionsArgv: sandboxed prefixes flatpak-spawn --host", () => {
+  const argv = buildSessionsArgv({
+    wilburPath: "/abs/path/wilbur",
+    useFlatpakSpawn: "auto",
+    detectSandbox: () => true,
+  });
+  assert.deepEqual(argv, [
+    "flatpak-spawn",
+    "--host",
+    "/abs/path/wilbur",
+    "--sessions",
+    "--json",
   ]);
 });
 

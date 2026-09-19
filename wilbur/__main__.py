@@ -43,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="resume a session by id (see --sessions)")
     parser.add_argument("--sessions", action="store_true",
                         help="list saved sessions")
+    parser.add_argument("--json", action="store_true",
+                        help="with --sessions, emit machine-readable JSON")
     parser.add_argument("--version", action="version", version=f"wilbur {__version__}")
     args = parser.parse_args(argv)
 
@@ -65,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.sessions:
         from . import session as sessions
         rows = sessions.listing()
+        if args.json:
+            import json as _json
+            print(_json.dumps(rows))
+            return 0
         if not rows:
             print("no saved sessions")
             return 0

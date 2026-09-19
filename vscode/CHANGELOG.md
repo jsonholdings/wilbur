@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0
+
+- **Sessions:** Wilbur: Resume last session (`--continue`) and Wilbur:
+  Sessions… (a quick pick built from `wilbur --sessions --json`, new in
+  wilbur 2.9.0), both opening in a new terminal so they never clobber the
+  one the other commands talk to.
+- **Status bar:** shows the model wilbur will launch with and whether
+  Ollama is reachable (polled every 30s against `/api/version`). Click it
+  to list local Ollama models (`/api/tags`) and switch wilbur's default
+  model, writing `~/.config/wilbur/config.json` directly.
+- **Diagnostics:** a "Fix with Wilbur" quick-fix code action on any
+  error/warning, plus Wilbur: Send problems in file, both sending file,
+  line and message into the Wilbur terminal. Model filtering on the
+  switch-model list is unfiltered by design — Ollama's `/api/tags` has no
+  reliable tool-calling flag to filter on.
+- **Settings:** `wilbur.model`, `wilbur.approvalMode` (`manual`/`auto`,
+  maps to `--yes`), `wilbur.contextSize` (`-c`), applied whenever wilbur is
+  launched.
+- Requires wilbur 2.9.0+ for Wilbur: Sessions… (`--sessions --json`);
+  earlier CLI versions still work for every other command.
+- Not in this release: diff review for proposed edits, and a chat sidebar
+  webview. Both are tracked in BACKLOG.md.
+
 ## 0.2.0
 
 - Public-release prep: Apache-2.0 `LICENSE`/`NOTICE`, Marketplace metadata

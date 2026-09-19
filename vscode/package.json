@@ -2,7 +2,7 @@
   "name": "wilbur-vscode",
   "displayName": "Wilbur",
   "description": "Run Wilbur, the local offline coding agent (Ollama + a local model), in a VS Code terminal panel.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "icon": "media/icon.png",
   "publisher": "jsonholdings",
   "license": "Apache-2.0",
@@ -16,9 +16,14 @@
     "theme": "dark"
   },
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:wilbur.open",
     "onCommand:wilbur.askAboutSelection",
     "onCommand:wilbur.sendCurrentFile",
+    "onCommand:wilbur.resumeLast",
+    "onCommand:wilbur.sessions",
+    "onCommand:wilbur.switchModel",
+    "onCommand:wilbur.sendProblems",
     "onView:wilburActivityView"
   ],
   "main": "./src/extension.js",
@@ -36,6 +41,22 @@
       {
         "command": "wilbur.sendCurrentFile",
         "title": "Wilbur: Send current file"
+      },
+      {
+        "command": "wilbur.resumeLast",
+        "title": "Wilbur: Resume last session"
+      },
+      {
+        "command": "wilbur.sessions",
+        "title": "Wilbur: Sessions…"
+      },
+      {
+        "command": "wilbur.switchModel",
+        "title": "Wilbur: Switch model"
+      },
+      {
+        "command": "wilbur.sendProblems",
+        "title": "Wilbur: Send problems in file"
       }
     ],
     "menus": {
@@ -91,6 +112,22 @@
           "enum": ["auto", "on", "off"],
           "default": "auto",
           "description": "Whether to prefix wilbur with 'flatpak-spawn --host' to escape the VS Code Flatpak sandbox. 'auto' detects the sandbox via /.flatpak-info."
+        },
+        "wilbur.model": {
+          "type": "string",
+          "default": "",
+          "description": "Ollama model to pass to wilbur via -m on launch. Leave empty to use wilbur's own default (~/.config/wilbur/config.json). The status bar's model switcher writes there directly instead of this setting."
+        },
+        "wilbur.approvalMode": {
+          "type": "string",
+          "enum": ["manual", "auto"],
+          "default": "manual",
+          "description": "'auto' passes --yes to wilbur, auto-approving its proposed actions. 'manual' (default) leaves wilbur's own approval prompts in place."
+        },
+        "wilbur.contextSize": {
+          "type": "number",
+          "default": 0,
+          "description": "Context window size passed to wilbur via -c. 0 means unset (wilbur's own default)."
         }
       }
     }

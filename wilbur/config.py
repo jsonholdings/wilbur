@@ -63,6 +63,11 @@ class Config:
     # hitting a round limit that would make it stop and summarise instead.
     subagent_max_turns: int = 25
 
+    # Printed by the REPL (not the model) when a turn ends and nothing is left in
+    # flight: no subagents running, nothing queued, no round limit hit.
+    idle_signoff: bool = True
+    idle_signoff_text: str = "THANK YOU FOR THE SLOP \u2014 MAY I HAVE ANOTHER?"
+
     # --- team mode ---
     # "auto" sizes the gate itself (wilbur.team.needs_team): a trivial,
     # single-file ask runs single-agent; a multi-file or risky one gets the

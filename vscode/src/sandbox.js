@@ -67,4 +67,24 @@ function buildCheckArgv(opts) {
   return ["sh", "-c", inner];
 }
 
-module.exports = { isFlatpakSandbox, buildLaunchArgv, buildCheckArgv, shellQuote };
+/**
+ * Build the argv used to list wilbur's saved sessions as JSON
+ * (`wilbur --sessions --json`), honoring the same flatpak-spawn detection as
+ * buildLaunchArgv/buildCheckArgv so it runs in the same namespace the real
+ * launch would. Unlike buildCheckArgv this is a plain argv array (no shell
+ * wrapping), so it can be passed straight to spawnSync.
+ *
+ * @param {object} opts same shape as buildLaunchArgv's opts (args is ignored)
+ * @returns {string[]}
+ */
+function buildSessionsArgv(opts) {
+  return buildLaunchArgv({ ...opts, args: ["--sessions", "--json"] });
+}
+
+module.exports = {
+  isFlatpakSandbox,
+  buildLaunchArgv,
+  buildCheckArgv,
+  buildSessionsArgv,
+  shellQuote,
+};

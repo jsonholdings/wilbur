@@ -211,3 +211,49 @@ def test_queue_command_lists_and_clears(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "2 command(s) dropped" in out
     assert repl._input_q.qsize() == 0
+
+
+SIGNOFF = "THANK YOU FOR THE SLOP — MAY I HAVE ANOTHER?"
+
+
+def test_signoff_only_after_the_last_queued_turn(monkeypatch, tmp_path, capsys):
+    """The idle sign-off is an honest 'waiting on you' signal: not printed while
+    queued commands remain, printed exactly once when the queue drains."""
+    gate = threading.Event()
+    client = _GatedClient([say("first done"), say("second done"), say("third done")], gate)
+    repl, w_fd = _make_repl(monkeypatch, tmp_path, client)
+    t = _run_in_thread(repl)
+    _wait_until(lambda: repl._pump_thread is not None)
+    os.write(w_fd, b"first\n")
+    _wait_until(lambda: repl._turn_active.is_set())
+    os.write(w_fd, b"second\n")
+    os.write(w_fd, b"third\n")
+    _wait_until(lambda: repl._input_q.qsize() >= 2)
+    gate.set()
+    _wait_until(lambda: len(client.seen) == 3 and not repl._turn_active.is_set())
+    os.write(w_fd, b"/exit\n")
+    t.join(timeout=5)
+    out = capsys.readouterr().out
+    assert out.count(SIGNOFF) == 1
+    assert out.index("third done") < out.index(SIGNOFF)
+
+
+def test_signoff_suppressed_when_disabled_or_limit_hit(monkeypatch, tmp_path, capsys):
+    gate = threading.Event()
+    gate.set()
+    client = _GatedClient([say("done")], gate)
+    repl, w_fd = _make_repl(monkeypatch, tmp_path, client)
+    repl.config.idle_signoff = False
+    t = _run_in_thread(repl)
+    _wait_until(lambda: repl._pump_thread is not None)
+    os.write(w_fd, b"go\n")
+    _wait_until(lambda: len(client.seen) == 1 and not repl._turn_active.is_set())
+    os.write(w_fd, b"/exit\n")
+    t.join(timeout=5)
+    assert SIGNOFF not in capsys.readouterr().out
+
+    repl.config.idle_signoff = True
+    repl._turn_hit_limit = True
+    assert repl._is_idle() is False
+    repl._turn_hit_limit = False
+    assert repl._is_idle() is True
