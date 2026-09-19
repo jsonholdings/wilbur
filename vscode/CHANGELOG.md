@@ -1,5 +1,10 @@
 # Changelog
 
+
+## 0.3.1
+
+- Fix: the README header image on the Marketplace and Open VSX pointed at a non-existent repo-root path; it now uses its full URL.
+
 ## 0.3.0
 
 - **Sessions:** Wilbur: Resume last session (`--continue`) and Wilbur:

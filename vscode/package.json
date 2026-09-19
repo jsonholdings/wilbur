@@ -2,7 +2,7 @@
   "name": "wilbur-vscode",
   "displayName": "Wilbur",
   "description": "Run Wilbur, the local offline coding agent (Ollama + a local model), in a VS Code terminal panel.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "icon": "media/icon.png",
   "publisher": "jsonholdings",
   "license": "Apache-2.0",

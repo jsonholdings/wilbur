@@ -1,6 +1,6 @@
 # Wilbur for VS Code
 
-<p align="center"><img src="media/icon.png" width="96" alt="Wilbur"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/jsonholdings/wilbur/main/vscode/media/icon.png" width="96" alt="Wilbur"></p>
 
 **Wilbur** — a local coding agent for the terminal, tools, subagents, a plan
 it keeps, driven entirely by models on your own GPU. This extension runs
