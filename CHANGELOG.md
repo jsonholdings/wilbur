@@ -3,6 +3,36 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.12.0
+
+- Wilbur improvement programme, checkpoint 2: a `run_tests` tool that runs the project's
+  own test command (pytest via JUnit XML, or `npm test`/`make test` with best-effort
+  regex parsing) and returns pass/fail counts plus file:line detail per failure instead
+  of raw test-runner output the model has to re-parse itself.
+- A skills system: `SKILL.md` folders (a short frontmatter name/description the model
+  sees up front, a body loaded only on demand) discovered from a project's
+  `.wilbur/skills/`, the user's `~/.config/wilbur/skills/`, and three built-in starter
+  skills (`writing-tests`, `bench-tasks`, `changelog-entries`), exposed via `list_skills`
+  and `load_skill`.
+- `bench/tasks/07_test_diagnosis` added to the task benchmark; validated the same way as
+  the existing six tasks (see `bench/VALIDATION.md`).
+
+## 2.11.0
+
+- Wilbur improvement programme, checkpoint 1: a task benchmark harness (`bench/`) for
+  measuring agent quality before/after a change against fixed coding tasks with real
+  pass/fail tests, run headlessly and recorded to JSONL (pass rate, rounds, wall time,
+  tokens/s). Tested only against the fake model backend so far; the live run needs a
+  Wilbur GPU window (see `bench/README.md`).
+- Tool-call recovery now repairs common local-model JSON mistakes before giving up: a
+  trailing comma before `}`/`]`, and single-quoted strings in place of double (only when
+  the text has no double quotes at all, so a legitimately mixed string is never
+  mangled). Applies to bare/tagged/fenced calls and to a string-encoded `arguments`
+  field alike.
+- `OllamaClient` retries a transient failure (connection reset, timeout, 5xx) with
+  capped exponential backoff (default 3 retries); a 4xx or any other error is never
+  retried.
+
 ## 2.10.0
 
 - Idle sign-off: when a turn ends with nothing left in flight (no subagents running, nothing queued, no round

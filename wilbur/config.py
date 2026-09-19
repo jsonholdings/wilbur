@@ -12,6 +12,10 @@ SESSION_DIR = Path(os.environ.get("WILBUR_SESSIONS", Path.home() / ".local" / "s
 # Kept alongside CONFIG_PATH/SESSION_DIR, env-overridable for the same reason:
 # a test that exercises the real pump must not write into the real home dir.
 HISTORY_PATH = Path(os.environ.get("WILBUR_HISTORY", Path.home() / ".config" / "wilbur" / "history"))
+# User-scope SKILL.md folders (see wilbur/skills.py), same env-override
+# pattern as the paths above so tests can redirect it without touching the
+# owner's real ~/.config/wilbur/skills.
+USER_SKILLS_DIR = Path(os.environ.get("WILBUR_USER_SKILLS_DIR", Path.home() / ".config" / "wilbur" / "skills"))
 
 
 @dataclass

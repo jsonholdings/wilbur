@@ -1,6 +1,11 @@
 # Changelog
 
 
+## 0.3.2
+
+- New Wilbur icon set: a redrawn pig mark for the Marketplace icon, the activity bar and the
+  editor tab, with dedicated small-size drawings so it stays legible at 16px.
+
 ## 0.3.1
 
 - Fix: the README header image on the Marketplace and Open VSX pointed at a non-existent repo-root path; it now uses its full URL.

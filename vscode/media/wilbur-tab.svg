@@ -1,23 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <!-- Terminal-tab icon: the icon.svg pig without its rounded-square background,
-       simplified for legibility at 16px (no blush/highlight dots -- they blur). -->
-  <defs>
-    <radialGradient id="face" cx="0.42" cy="0.35" r="0.75">
-      <stop offset="0" stop-color="#ffe9df"/>
-      <stop offset="1" stop-color="#f6c2ad"/>
-    </radialGradient>
-  </defs>
-  <g transform="translate(12 12) scale(0.1875)">
-    <path d="M-22 -26 C-32 -40 -44 -44 -49 -39 C-52 -32 -47 -16 -34 -8 Z" fill="#f2a88c"/>
-    <path d="M22 -26 C32 -40 44 -44 49 -39 C52 -32 47 -16 34 -8 Z" fill="#f2a88c"/>
-    <path d="M-24 -28 C-31 -37 -39 -39 -42 -36 C-43 -31 -40 -21 -33 -15 Z" fill="#e58467"/>
-    <path d="M24 -28 C31 -37 39 -39 42 -36 C43 -31 40 -21 33 -15 Z" fill="#e58467"/>
-    <ellipse cx="0" cy="0" rx="40" ry="36" fill="url(#face)"/>
-    <circle cx="-15" cy="-9" r="5" fill="#3a2320"/>
-    <circle cx="15" cy="-9" r="5" fill="#3a2320"/>
-    <ellipse cx="0" cy="12" rx="17" ry="12.5" fill="#ee9479"/>
-    <ellipse cx="0" cy="10.5" rx="15" ry="10.5" fill="#f4a58c"/>
-    <ellipse cx="-6.5" cy="12" rx="3.3" ry="4.6" fill="#8a3a2a"/>
-    <ellipse cx="6.5" cy="12" rx="3.3" ry="4.6" fill="#8a3a2a"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" role="img" aria-label="Wilbur mark, 16px light">
+  <title>Wilbur mark, 16px light</title>
+  <path d="M 15.4,8.0 L 15.39,10.67 L 15.36,11.52 L 15.32,12.14 L 15.25,12.63 L 15.17,13.04 L 15.07,13.4 L 14.94,13.71 L 14.8,13.98 L 14.63,14.23 L 14.44,14.44 L 14.23,14.63 L 13.98,14.8 L 13.71,14.94 L 13.4,15.07 L 13.04,15.17 L 12.63,15.25 L 12.14,15.32 L 11.52,15.36 L 10.67,15.39 L 8.0,15.4 L 5.33,15.39 L 4.48,15.36 L 3.86,15.32 L 3.37,15.25 L 2.96,15.17 L 2.6,15.07 L 2.29,14.94 L 2.02,14.8 L 1.77,14.63 L 1.56,14.44 L 1.37,14.23 L 1.2,13.98 L 1.06,13.71 L 0.93,13.4 L 0.83,13.04 L 0.75,12.63 L 0.68,12.14 L 0.64,11.52 L 0.61,10.67 L 0.6,8.0 L 0.61,5.33 L 0.64,4.48 L 0.68,3.86 L 0.75,3.37 L 0.83,2.96 L 0.93,2.6 L 1.06,2.29 L 1.2,2.02 L 1.37,1.77 L 1.56,1.56 L 1.77,1.37 L 2.02,1.2 L 2.29,1.06 L 2.6,0.93 L 2.96,0.83 L 3.37,0.75 L 3.86,0.68 L 4.48,0.64 L 5.33,0.61 L 8.0,0.6 L 10.67,0.61 L 11.52,0.64 L 12.14,0.68 L 12.63,0.75 L 13.04,0.83 L 13.4,0.93 L 13.71,1.06 L 13.98,1.2 L 14.23,1.37 L 14.44,1.56 L 14.63,1.77 L 14.8,2.02 L 14.94,2.29 L 15.07,2.6 L 15.17,2.96 L 15.25,3.37 L 15.32,3.86 L 15.36,4.48 L 15.39,5.33 Z" fill="#c8582a"/>
+  <rect x="3" y="2" width="10" height="11" rx="3" ry="3" fill="#f6c2ad"/>
+  <rect x="6" y="8" width="5" height="3" rx="1" ry="1" fill="#ffe9df"/>
+  <rect x="7" y="9" width="1" height="1" fill="#3a2320"/>
+  <rect x="9" y="9" width="1" height="1" fill="#3a2320"/>
+  <rect x="6" y="5" width="1" height="1" fill="#3a2320"/>
+  <rect x="9" y="5" width="1" height="1" fill="#3a2320"/>
 </svg>

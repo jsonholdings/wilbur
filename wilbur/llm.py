@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import re
+import socket
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -21,6 +23,43 @@ from typing import Any, Iterator
 
 TOOL_TAG_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 FENCED_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+# Matches a comma followed by only whitespace/comments before a closing } or ].
+_TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
+
+
+def _lenient_json_loads(text: str) -> Any:
+    """Parse JSON a local model almost got right.
+
+    Real failures observed from small local models writing tool calls as
+    plain text: a trailing comma before the closing brace/bracket
+    (`{"a": 1,}`), and single-quoted strings instead of double
+    (`{'name': 'read_file'}`). A strict `json.loads` rejects both and the
+    whole call is dropped -- this tries strict first (never touches text
+    that was already valid) and only rewrites when strict parsing fails.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    repaired = _TRAILING_COMMA_RE.sub(r"\1", text)
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        pass
+
+    # Single-quoted JSON: only attempted if the text has no double quotes at
+    # all, so a string that legitimately mixes quote styles (e.g. contains an
+    # apostrophe inside a double-quoted value) is never mangled.
+    if '"' not in repaired and "'" in repaired:
+        swapped = repaired.replace("'", '"')
+        try:
+            return json.loads(swapped)
+        except json.JSONDecodeError:
+            pass
+
+    raise json.JSONDecodeError("unparseable after repair attempts", text, 0)
 
 
 @dataclass
@@ -87,7 +126,7 @@ def _coerce_call(obj: Any) -> ToolCall | None:
     args = obj.get("arguments", obj.get("parameters", obj.get("args", {})))
     if isinstance(args, str):
         try:
-            args = json.loads(args)
+            args = _lenient_json_loads(args)
         except json.JSONDecodeError:
             return None
     if not isinstance(args, dict):
@@ -110,7 +149,7 @@ def recover_tool_calls(content: str, known: set[str]) -> tuple[list[ToolCall], s
     for pattern in (TOOL_TAG_RE, FENCED_RE):
         for match in pattern.finditer(content):
             try:
-                parsed = json.loads(match.group(1))
+                parsed = _lenient_json_loads(match.group(1))
             except json.JSONDecodeError:
                 continue
             call = _coerce_call(parsed)
@@ -122,7 +161,7 @@ def recover_tool_calls(content: str, known: set[str]) -> tuple[list[ToolCall], s
         # Bare JSON with no wrapper -- the abliterated-32b failure mode.
         for start, end in _balanced_json_objects(content):
             try:
-                parsed = json.loads(content[start:end])
+                parsed = _lenient_json_loads(content[start:end])
             except json.JSONDecodeError:
                 continue
             call = _coerce_call(parsed)
@@ -136,11 +175,53 @@ def recover_tool_calls(content: str, known: set[str]) -> tuple[list[ToolCall], s
     return calls, cleaned.strip()
 
 
+class TransientOllamaError(Exception):
+    """A retryable failure talking to Ollama: connection reset, timeout, or a
+    5xx from the server. 4xx (bad request, model not found, etc.) is never
+    wrapped here -- retrying a client error just repeats the same failure."""
+
+
+def _is_transient(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500
+    if isinstance(exc, (urllib.error.URLError, socket.timeout, TimeoutError,
+                         ConnectionError, ConnectionResetError)):
+        return True
+    return False
+
+
 class OllamaClient:
-    def __init__(self, base_url: str, model: str, timeout: int = 600) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        timeout: int = 600,
+        *,
+        max_retries: int = 3,
+        backoff_base: float = 1.0,
+        sleep: Any = time.sleep,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.backoff_base = backoff_base
+        self._sleep = sleep
+
+    def _post(self, request: urllib.request.Request) -> dict[str, Any]:
+        """Send one request, retrying only transient failures with capped
+        exponential backoff (backoff_base * 2**attempt). A 4xx or any other
+        non-transient error raises immediately on the first attempt."""
+        attempt = 0
+        while True:
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    return json.loads(response.read())
+            except Exception as exc:  # noqa: BLE001 -- classified below
+                if not _is_transient(exc) or attempt >= self.max_retries:
+                    raise
+                self._sleep(self.backoff_base * (2 ** attempt))
+                attempt += 1
 
     def chat(
         self,
@@ -166,8 +247,7 @@ class OllamaClient:
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
-            data = json.loads(response.read())
+        data = self._post(request)
 
         message = data.get("message", {})
         content = message.get("content", "") or ""
@@ -177,7 +257,7 @@ class OllamaClient:
             args = fn.get("arguments", {})
             if isinstance(args, str):
                 try:
-                    args = json.loads(args)
+                    args = _lenient_json_loads(args)
                 except json.JSONDecodeError:
                     args = {}
             calls.append(ToolCall(name=fn.get("name", ""), arguments=args,

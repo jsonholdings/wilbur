@@ -52,10 +52,12 @@ def isolate_wilbur_home(monkeypatch, tmp_path):
     fake_config = tmp_path / "config.json"
     fake_sessions = tmp_path / "sessions"
     fake_history = tmp_path / "history"
+    fake_user_skills = tmp_path / "skills"
 
     monkeypatch.setattr(config_mod, "CONFIG_PATH", fake_config)
     monkeypatch.setattr(config_mod, "SESSION_DIR", fake_sessions)
     monkeypatch.setattr(config_mod, "HISTORY_PATH", fake_history)
+    monkeypatch.setattr(config_mod, "USER_SKILLS_DIR", fake_user_skills)
     # Each of these modules imported the name directly (`from .config import
     # X`), which binds its own reference at import time -- patching the
     # source module above does not follow into an already-bound name.

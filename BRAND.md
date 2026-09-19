@@ -18,17 +18,20 @@ is never described as a Claude Code fork, rebrand, or affiliated product.
 | Use | Value |
 |---|---|
 | CLI gradient (ANSI 256, dark→light) | `130 166 173 209 216 223` |
-| Icon background gradient, dark stop | `#a8431c` |
-| Icon background gradient, light stop | `#e8743b` |
+| Icon head gradient, dark stop | `#c8582a` |
+| Icon head gradient, light stop | `#e8743b` |
 | Icon face gradient, dark stop | `#f6c2ad` |
 | Icon face gradient, light stop | `#ffe9df` |
-| VS Code `galleryBanner.color` | `#a8431c` (matches the icon's dark stop) |
+| VS Code `galleryBanner.color` | `#a8431c` |
 
-**Icon files**
+**Icon set:**
 
-- `vscode/media/icon.svg` — source (pig face, terracotta gradient, `✻`).
-- `vscode/media/icon.png` — rendered Marketplace/extension-list icon.
-- `vscode/media/wilbur.svg` — monochrome activity-bar mark, theme-tinted.
+- `vscode/media/icon.svg`: the full-colour mark (pig face, terracotta gradient). The `✻` glyph
+  appears in the CLI banner only, not on the mark.
+- `vscode/media/icon.png`: 128×128 Marketplace and extension-list icon, rendered from `icon.svg`.
+- `vscode/media/wilbur.svg`: the activity-bar mark. One `currentColor` path with the eyes and
+  snout cut out as holes, because VS Code masks activity-bar icons by alpha.
+- `vscode/media/wilbur-tab.svg`: the colour mark drawn for small sizes (16px).
 
 **Usage rules**
 

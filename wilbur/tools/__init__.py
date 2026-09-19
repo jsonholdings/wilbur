@@ -12,6 +12,8 @@ from .base import Approval, Tool, ToolContext, ToolResult, clamp, denial_message
 from .files import EditFile, ListFiles, ReadFile, WriteFile
 from .search import Glob, Grep
 from .shell import Bash
+from .skills_tool import ListSkills, LoadSkill
+from .test_runner import RunTests
 from .todo import TodoWrite
 
 
@@ -19,6 +21,7 @@ def build_registry(include_task: bool = True) -> dict[str, Any]:
     tools: list[Any] = [
         Bash(), ReadFile(), WriteFile(), EditFile(),
         Glob(), Grep(), ListFiles(), TodoWrite(),
+        RunTests(), ListSkills(), LoadSkill(),
     ]
     if include_task:
         from .task import Task
