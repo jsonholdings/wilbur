@@ -9,10 +9,13 @@ const {
   buildLaunchArgv,
   buildCheckArgv,
   buildSessionsArgv,
+  buildForgetArgv,
   shellQuote,
 } = require("./sandbox");
 
 const TERMINAL_NAME = "Wilbur";
+// See sendLaunchLine()'s docstring for why this exists.
+const LAUNCH_DELAY_MS = 400;
 let wilburTerminal = null;
 let statusBarItem = null;
 let statusBarPollHandle = null;
@@ -82,6 +85,31 @@ function workspaceCwd() {
   return folders && folders.length > 0 ? folders[0].uri.fsPath : undefined;
 }
 
+/**
+ * Send the wilbur launch command into a just-created terminal.
+ *
+ * A brand-new VS Code terminal is not exclusively ours the instant it is
+ * created: other extensions (notably Python's "activate environment in new
+ * terminals" feature) also write into a freshly opened terminal, and a
+ * `sendText` fired in the very same tick as `createTerminal` can land ahead
+ * of, or interleaved with, that other write. If wilbur's own prompt happens
+ * to be the thing reading the pty when that unrelated text arrives, wilbur
+ * treats it as a genuine first message and acts on it -- which is how a
+ * stale `source .../.venv/bin/activate` line for an unrelated project ended
+ * up as the literal first turn of a brand-new wilbur session on 2026-09-19.
+ * A short delay does not make the race impossible, but it gives the shell
+ * time to finish its own startup (and any other extension's injected text)
+ * before wilbur's launch line -- and therefore wilbur's own prompt -- exists
+ * to receive it.
+ * @param {import("vscode").Terminal} terminal
+ * @param {string[]} argv
+ */
+function sendLaunchLine(terminal, argv) {
+  setTimeout(() => {
+    terminal.sendText(argv.map(shellQuote).join(" "), true);
+  }, LAUNCH_DELAY_MS);
+}
+
 /** Get (or create) the Wilbur terminal, launching wilbur in it if it's new. */
 function getOrCreateTerminal() {
   if (wilburTerminal && vscode.window.terminals.includes(wilburTerminal)) {
@@ -115,9 +143,16 @@ function getOrCreateTerminal() {
       "wilbur-tab.svg",
     ),
     color: new vscode.ThemeColor("terminal.ansiRed"),
+    // Never let VS Code revive this terminal (or replay anything queued for
+    // it) across a window reload/crash. A previous run's leftover session
+    // must not resurface on its own the next time the owner opens Wilbur --
+    // that is the exact bug reported 2026-09-19: an old "twilio lookup"
+    // session's shell activation line landed as the *first turn* of a brand
+    // new wilbur process after reopening VS Code.
+    isTransient: true,
   });
 
-  wilburTerminal.sendText(argv.map(shellQuote).join(" "), true);
+  sendLaunchLine(wilburTerminal, argv);
   return { terminal: wilburTerminal, isNew: true };
 }
 
@@ -162,8 +197,11 @@ function launchWilburTerminal(name, extraArgs) {
       "wilbur-tab.svg",
     ),
     color: new vscode.ThemeColor("terminal.ansiRed"),
+    // See getOrCreateTerminal()'s comment: never let VS Code revive a
+    // resume/continue terminal (or replay anything queued for it) on its own.
+    isTransient: true,
   });
-  terminal.sendText(argv.map(shellQuote).join(" "), true);
+  sendLaunchLine(terminal, argv);
   terminal.show();
   return terminal;
 }
@@ -192,11 +230,12 @@ function relativeTime(unixSeconds) {
 }
 
 /** Command palette flow: pick a saved wilbur session and resume it. */
-function sessionsPicker() {
+/** Fetch saved sessions as `wilbur --sessions --json` sees them, or undefined + a shown error. */
+function listSavedSessions() {
   const { wilburPath, useFlatpakSpawn } = getConfig();
   if (!isWilburAvailable(wilburPath, useFlatpakSpawn)) {
     warnWilburNotFound(wilburPath);
-    return;
+    return undefined;
   }
   const argv = buildSessionsArgv({ wilburPath, useFlatpakSpawn });
   let result;
@@ -206,44 +245,90 @@ function sessionsPicker() {
     vscode.window.showErrorMessage(
       `Wilbur: could not list sessions: ${err.message}`
     );
-    return;
+    return undefined;
   }
   if (result.status !== 0 || !result.stdout) {
     vscode.window.showErrorMessage(
       "Wilbur: could not list sessions (is wilbur.path correct and up to date?)."
     );
-    return;
+    return undefined;
   }
-  let sessions;
   try {
-    sessions = JSON.parse(result.stdout);
+    return JSON.parse(result.stdout);
   } catch {
     vscode.window.showErrorMessage(
       "Wilbur: --sessions --json output was not valid JSON."
     );
+    return undefined;
+  }
+}
+
+const FORGET_BUTTON = {
+  iconPath: new vscode.ThemeIcon("trash"),
+  tooltip: "Forget this session (delete it; --continue/--resume can never pick it up again)",
+};
+
+function sessionToItem(s) {
+  return {
+    label: (s.objective && s.objective[0]) || "(no objective)",
+    description: typeof s.turns === "number" ? `${s.turns} turns` : undefined,
+    detail: `${s.cwd || "(unknown cwd)"} · ${relativeTime(s.updated)}`,
+    id: s.id,
+    buttons: [FORGET_BUTTON],
+  };
+}
+
+/**
+ * Command palette flow: pick a saved wilbur session and resume it, or
+ * forget (permanently delete) one via its trash button -- the documented way
+ * to clear a stale/queued session so it can never resurface on its own. This
+ * never runs, and never deletes anything, without the owner explicitly
+ * opening this picker and clicking an item or its trash button.
+ */
+function sessionsPicker() {
+  const sessions = listSavedSessions();
+  if (sessions === undefined) {
     return;
   }
   if (!Array.isArray(sessions) || sessions.length === 0) {
     vscode.window.showInformationMessage("Wilbur: no saved sessions found.");
     return;
   }
-  const items = sessions.map((s) => ({
-    label: (s.objective && s.objective[0]) || "(no objective)",
-    description: typeof s.turns === "number" ? `${s.turns} turns` : undefined,
-    detail: `${s.cwd || "(unknown cwd)"} · ${relativeTime(s.updated)}`,
-    id: s.id,
-  }));
-  vscode.window
-    .showQuickPick(items, { placeHolder: "Resume a Wilbur session" })
-    .then((choice) => {
-      if (!choice) {
-        return;
-      }
-      launchWilburTerminal(`${TERMINAL_NAME}: resume`, [
-        "--resume",
-        choice.id,
-      ]);
-    });
+
+  const quickPick = vscode.window.createQuickPick();
+  quickPick.placeholder = "Resume a Wilbur session, or click the trash icon to forget one";
+  quickPick.items = sessions.map(sessionToItem);
+
+  quickPick.onDidTriggerItemButton((event) => {
+    const { wilburPath, useFlatpakSpawn } = getConfig();
+    const argv = buildForgetArgv({ wilburPath, useFlatpakSpawn }, event.item.id);
+    let result;
+    try {
+      result = spawnSync(argv[0], argv.slice(1), { encoding: "utf8" });
+    } catch (err) {
+      vscode.window.showErrorMessage(`Wilbur: could not forget session: ${err.message}`);
+      return;
+    }
+    if (result.status !== 0) {
+      vscode.window.showErrorMessage(
+        `Wilbur: could not forget session ${event.item.id}.`
+      );
+      return;
+    }
+    vscode.window.showInformationMessage(`Wilbur: forgot session ${event.item.id}.`);
+    quickPick.items = quickPick.items.filter((i) => i.id !== event.item.id);
+  });
+
+  quickPick.onDidAccept(() => {
+    const choice = quickPick.selectedItems[0];
+    quickPick.hide();
+    if (!choice) {
+      return;
+    }
+    launchWilburTerminal(`${TERMINAL_NAME}: resume`, ["--resume", choice.id]);
+  });
+  quickPick.onDidHide(() => quickPick.dispose());
+  quickPick.show();
 }
 
 /** Send a line of text into the (already-running) Wilbur REPL. */

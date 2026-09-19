@@ -39,6 +39,29 @@ def test_load_of_a_missing_session_is_none_not_an_exception():
     assert sessions.load("nope") is None
 
 
+def test_forget_deletes_a_saved_session():
+    """The documented way to clear a stale/queued session (owner-facing:
+    `wilbur --forget ID`, or the VS Code sessions picker's trash button)."""
+    msgs = [{"role": "user", "content": "hi"}]
+    sessions.save("stale-sid", "/tmp/proj", msgs, _state(), "m")
+    assert sessions.load("stale-sid") is not None
+
+    assert sessions.forget("stale-sid") is True
+    assert sessions.load("stale-sid") is None
+
+
+def test_forget_of_a_missing_session_returns_false_not_an_exception():
+    assert sessions.forget("never-existed") is False
+
+
+def test_forgotten_session_is_not_picked_up_by_latest():
+    """A forgotten session must never resurface via --continue."""
+    msgs = [{"role": "user", "content": "hi"}]
+    sessions.save("forget-me", "/tmp/proj", msgs, _state(), "m")
+    sessions.forget("forget-me")
+    assert sessions.latest("/tmp/proj") is None
+
+
 def test_corrupt_session_file_is_none_not_an_exception():
     sessions.SESSION_DIR.mkdir(parents=True, exist_ok=True)
     (sessions.SESSION_DIR / "bad.json").write_text("{not json")

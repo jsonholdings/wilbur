@@ -6,6 +6,7 @@ const {
   buildLaunchArgv,
   buildCheckArgv,
   buildSessionsArgv,
+  buildForgetArgv,
   shellQuote,
 } = require("../src/sandbox");
 
@@ -118,6 +119,19 @@ test("buildSessionsArgv: sandboxed prefixes flatpak-spawn --host", () => {
     "--sessions",
     "--json",
   ]);
+});
+
+test("buildForgetArgv: not sandboxed returns plain wilbur --forget ID argv", () => {
+  const argv = buildForgetArgv({ wilburPath: "wilbur", useFlatpakSpawn: "off" }, "Projects-123");
+  assert.deepEqual(argv, ["wilbur", "--forget", "Projects-123"]);
+});
+
+test("buildForgetArgv: sandboxed prefixes flatpak-spawn --host", () => {
+  const argv = buildForgetArgv(
+    { wilburPath: "/abs/path/wilbur", useFlatpakSpawn: "auto", detectSandbox: () => true },
+    "Projects-123"
+  );
+  assert.deepEqual(argv, ["flatpak-spawn", "--host", "/abs/path/wilbur", "--forget", "Projects-123"]);
 });
 
 test("shellQuote: wraps and escapes single quotes", () => {

@@ -1,0 +1,16 @@
+{
+  "source_sha256": {
+    "logo-source-light.svg": "c38de87891813a0901968d9bb922693937a6e1f311d4b7bcbaf61dfe12d91e34",
+    "logo-source-dark.svg": "c6ed0424a7a40dd94ef6d2f6e6872b09306799ab9954b9b151d863fff0495d6c",
+    "logo-source-tinted.svg": "ad07bba54b9e42fa7179096dbf54f504eb2ecb89deacd0dedea18a0a7d696045"
+  },
+  "outputs": [
+    "icon.svg",
+    "logo-light.svg",
+    "logo-dark.svg",
+    "social-preview.svg",
+    "social-preview.png",
+    "avatar.svg",
+    "avatar.png"
+  ]
+}

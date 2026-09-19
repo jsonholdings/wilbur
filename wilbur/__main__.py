@@ -43,6 +43,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="resume a session by id (see --sessions)")
     parser.add_argument("--sessions", action="store_true",
                         help="list saved sessions")
+    parser.add_argument("--forget", metavar="ID",
+                        help="delete a saved session by id, so --continue/--resume "
+                             "can never pick it up again (see --sessions for ids)")
     parser.add_argument("--json", action="store_true",
                         help="with --sessions, emit machine-readable JSON")
     parser.add_argument("--version", action="version", version=f"wilbur {__version__}")
@@ -63,6 +66,14 @@ def main(argv: list[str] | None = None) -> int:
     prompt = args.oneshot or (" ".join(args.prompt) if args.prompt else "")
     if prompt:
         return _oneshot(config, args.cwd, prompt, auto=args.yes or bool(args.oneshot))
+
+    if args.forget:
+        from . import session as sessions
+        if sessions.forget(args.forget):
+            print(f"forgot session {args.forget}")
+            return 0
+        print(f"no saved session {args.forget}")
+        return 1
 
     if args.sessions:
         from . import session as sessions

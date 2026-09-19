@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.13.0
+
+- `--forget ID` deletes a saved session so `--continue`/`--resume` can never pick it up again --
+  the documented way to clear a stale or unwanted session (also reachable from the VS Code
+  extension's sessions picker, via a trash button on each entry).
+
 ## 2.12.0
 
 - Wilbur improvement programme, checkpoint 2: a `run_tests` tool that runs the project's

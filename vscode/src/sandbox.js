@@ -81,10 +81,24 @@ function buildSessionsArgv(opts) {
   return buildLaunchArgv({ ...opts, args: ["--sessions", "--json"] });
 }
 
+/**
+ * Build the argv used to delete a saved session (`wilbur --forget ID`), so a
+ * stale/queued session can never be picked up again by `--continue` or shown
+ * again by `--sessions`. Same shape as buildSessionsArgv.
+ *
+ * @param {object} opts same shape as buildLaunchArgv's opts (args is ignored)
+ * @param {string} id the session id to forget
+ * @returns {string[]}
+ */
+function buildForgetArgv(opts, id) {
+  return buildLaunchArgv({ ...opts, args: ["--forget", id] });
+}
+
 module.exports = {
   isFlatpakSandbox,
   buildLaunchArgv,
   buildCheckArgv,
   buildSessionsArgv,
+  buildForgetArgv,
   shellQuote,
 };

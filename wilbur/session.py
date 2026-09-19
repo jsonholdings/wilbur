@@ -99,6 +99,20 @@ def listing(limit: int = 20) -> list[dict[str, Any]]:
     return rows[:limit]
 
 
+def forget(session_id: str) -> bool:
+    """Delete one saved session so it can never be auto-picked by `--continue`
+    or shown again by `--sessions`. Returns True if a file was actually
+    removed, False if there was nothing to remove (never raises for a missing
+    or already-gone file -- the caller only cares whether it is now gone).
+    """
+    path = SESSION_DIR / f"{session_id}.json"
+    try:
+        path.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def new_id(cwd: str) -> str:
     return f"{_slug(cwd)}-{int(time.time())}"
 

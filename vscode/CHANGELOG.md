@@ -1,6 +1,18 @@
 # Changelog
 
 
+## 0.4.0
+
+- Fix: a saved Wilbur terminal could reappear and resume its old work on its own the next
+  time VS Code started, instead of waiting for an explicit "Open" or "Resume" action. Wilbur
+  terminals are now marked transient, so VS Code never revives or replays them across a
+  restart, and the launch command is no longer sent in the same instant the terminal is
+  created, closing a race where another extension's own text could land in Wilbur's prompt
+  first.
+- The sessions picker (`Wilbur: Sessions`) now has a trash button on each entry to permanently
+  forget a saved session, so a stale or unwanted one can be cleared without it ever being able
+  to resurface via Resume/Continue.
+
 ## 0.3.2
 
 - New Wilbur icon set: a redrawn pig mark for the Marketplace icon, the activity bar and the
