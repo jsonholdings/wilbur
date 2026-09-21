@@ -1,6 +1,39 @@
 # Changelog
 
 
+## 0.4.3
+
+- Change: `Wilbur: Open` now always opens a session. It previously reused a
+  healthy one, on the reasoning that a keybinding should focus what you have
+  rather than stack terminals up -- but a command called "Open" that refuses
+  to open is wrong however defensible the reuse looks. Use
+  `Wilbur: Focus Session` to switch between live sessions instead.
+
+
+## 0.4.2
+
+- Add: multiple concurrent Wilbur sessions. `Wilbur: New Session` always opens
+  an additional terminal; `Wilbur: Focus Session` picks which live session
+  subsequent sends target. Previously the extension held a single terminal and
+  `Wilbur: Open` returned it forever, so a second concurrent session was
+  impossible by construction -- not a bug in the reuse check, a missing
+  capability. `Wilbur: Open` still reuses a healthy session on purpose: a
+  keybinding should focus the one you have, not spawn a pile of them.
+  Closing the active session promotes the next live one so sends always have
+  a target.
+
+
+## 0.4.1
+
+- Fix: Wilbur could only be opened ONCE per VS Code window. Exiting wilbur ends
+  the process but leaves the terminal open as a dead tab -- `exitStatus` becomes
+  defined, `onDidCloseTerminal` never fires, and the terminal stays listed in
+  `window.terminals`. The reuse check saw a live-looking terminal and handed back
+  the dead one on every subsequent open, so a new session required closing and
+  reopening VS Code. A terminal whose process has exited is now discarded and a
+  fresh one created; a healthy session is still reused rather than duplicated.
+  Also clears the singleton on terminal state change, not only on tab close.
+
 ## 0.4.0
 
 - Fix: a saved Wilbur terminal could reappear and resume its old work on its own the next

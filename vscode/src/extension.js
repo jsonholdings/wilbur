@@ -17,6 +17,39 @@ const TERMINAL_NAME = "Wilbur";
 // See sendLaunchLine()'s docstring for why this exists.
 const LAUNCH_DELAY_MS = 400;
 let wilburTerminal = null;
+/**
+ * Every live Wilbur terminal, oldest first. `wilburTerminal` is the ACTIVE
+ * one -- the target for sendToWilbur/askAboutSelection/sendCurrentFile --
+ * and is always also a member of this list while it lives.
+ *
+ * Before 0.4.2 there was only the singleton, so a second concurrent session
+ * was impossible by construction: `wilbur.open` returned the existing
+ * terminal forever (owner, 2026-09-20: "a second session will not open
+ * either"). Resume/session-pick already created standalone terminals via
+ * launchWilburTerminal(), so the capability existed and was simply never
+ * reachable from the open path.
+ */
+let wilburSessions = [];
+
+/** Drop terminals VS Code has closed or whose process has exited. */
+function pruneSessions() {
+  wilburSessions = wilburSessions.filter(
+    (t) => vscode.window.terminals.includes(t) && !isDeadTerminal(t)
+  );
+  if (wilburTerminal && !wilburSessions.includes(wilburTerminal)) {
+    wilburTerminal = wilburSessions.length ? wilburSessions[wilburSessions.length - 1] : null;
+  }
+}
+
+/** Register a terminal as a session and make it the active one. */
+function adoptSession(terminal) {
+  if (!terminal) return terminal;
+  if (!wilburSessions.includes(terminal)) {
+    wilburSessions.push(terminal);
+  }
+  wilburTerminal = terminal;
+  return terminal;
+}
 let statusBarItem = null;
 let statusBarPollHandle = null;
 
@@ -110,9 +143,45 @@ function sendLaunchLine(terminal, argv) {
   }, LAUNCH_DELAY_MS);
 }
 
+/**
+ * True when a terminal object still exists but its process has exited.
+ *
+ * Exiting wilbur is NOT the same as closing the terminal. When the process
+ * ends, VS Code leaves the terminal open as a dead tab: `exitStatus` becomes
+ * defined, but `onDidCloseTerminal` does NOT fire and the terminal is still
+ * present in `vscode.window.terminals`.
+ *
+ * That combination is what made this extension unusable after one session
+ * (owner, 2026-09-20: "you can only open one session and when you exit that
+ * session you cant open a new one without closing and reopening vscode").
+ * The reuse check below saw a live-looking terminal and handed back the
+ * corpse, forever, because nothing cleared `wilburTerminal` until the whole
+ * window was reloaded.
+ * @param {import("vscode").Terminal} terminal
+ */
+function isDeadTerminal(terminal) {
+  return !!terminal && terminal.exitStatus !== undefined;
+}
+
 /** Get (or create) the Wilbur terminal, launching wilbur in it if it's new. */
 function getOrCreateTerminal() {
-  if (wilburTerminal && vscode.window.terminals.includes(wilburTerminal)) {
+  // A terminal whose process has exited must be dropped, not reused --
+  // sending a launch line to it does nothing and the user sees a dead tab.
+  pruneSessions();
+  if (isDeadTerminal(wilburTerminal)) {
+    try {
+      wilburTerminal.dispose();
+    } catch (_) {
+      // already gone; nothing to clean up
+    }
+    wilburTerminal = null;
+  }
+
+  if (
+    wilburTerminal &&
+    vscode.window.terminals.includes(wilburTerminal) &&
+    !isDeadTerminal(wilburTerminal)
+  ) {
     return { terminal: wilburTerminal, isNew: false };
   }
 
@@ -152,17 +221,78 @@ function getOrCreateTerminal() {
     isTransient: true,
   });
 
+  adoptSession(wilburTerminal);
   sendLaunchLine(wilburTerminal, argv);
   return { terminal: wilburTerminal, isNew: true };
 }
 
-function openWilbur() {
-  const { terminal } = getOrCreateTerminal();
+/**
+ * Open an ADDITIONAL Wilbur session, always in a fresh terminal.
+ *
+ * `wilbur.open` deliberately reuses a healthy session -- invoking it from a
+ * keybinding should focus the one you have, not spawn a pile of them. This
+ * is the explicit "I want another one" path, and it is what makes concurrent
+ * sessions possible at all.
+ */
+function newWilburSession() {
+  pruneSessions();
+  const n = wilburSessions.length + 1;
+  const terminal = launchWilburTerminal(`${TERMINAL_NAME} ${n}`, []);
   if (!terminal) {
     return undefined;
   }
+  adoptSession(terminal);
   terminal.show();
   return terminal;
+}
+
+/** Pick which live session subsequent sends target, and focus it. */
+function focusWilburSession() {
+  pruneSessions();
+  if (wilburSessions.length === 0) {
+    vscode.window.showInformationMessage("Wilbur: no sessions open.");
+    return Promise.resolve(undefined);
+  }
+  if (wilburSessions.length === 1) {
+    wilburSessions[0].show();
+    return Promise.resolve(wilburSessions[0]);
+  }
+  const items = wilburSessions.map((t, i) => ({
+    label: t.name || `${TERMINAL_NAME} ${i + 1}`,
+    description: t === wilburTerminal ? "active -- receives sends" : "",
+    _terminal: t,
+  }));
+  return Promise.resolve(
+    vscode.window.showQuickPick(items, {
+      placeHolder: "Focus a Wilbur session (it becomes the target for sends)",
+    })
+  ).then((choice) => {
+    if (!choice) return undefined;
+    adoptSession(choice._terminal);
+    choice._terminal.show();
+    return choice._terminal;
+  });
+}
+
+function openWilbur() {
+  // OPEN ALWAYS OPENS. Until 0.4.3 this reused a healthy session, on the
+  // reasoning that a keybinding should focus what you have rather than
+  // stack terminals up. That was my preference, not the owner's: he
+  // reported three times that only one tab would ever open (2026-09-20,
+  // "only one wilbur terminal tab opens at a time"). A command called
+  // "Open" that silently refuses to open anything is wrong, however
+  // defensible the reuse looked. Focusing an existing session is what
+  // `wilbur.focusSession` is for.
+  pruneSessions();
+  if (wilburSessions.length === 0) {
+    const { terminal } = getOrCreateTerminal();
+    if (!terminal) {
+      return undefined;
+    }
+    terminal.show();
+    return terminal;
+  }
+  return newWilburSession();
 }
 
 /**
@@ -592,6 +722,8 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("wilbur.open", openWilbur),
+    vscode.commands.registerCommand("wilbur.newSession", newWilburSession),
+    vscode.commands.registerCommand("wilbur.focusSession", focusWilburSession),
     vscode.commands.registerCommand(
       "wilbur.askAboutSelection",
       askAboutSelection
@@ -615,7 +747,23 @@ function activate(context) {
       if (t === wilburTerminal) {
         wilburTerminal = null;
       }
+      wilburSessions = wilburSessions.filter((s) => s !== t);
+      if (!wilburTerminal && wilburSessions.length) {
+        // Closing the active session promotes the next live one rather than
+        // leaving sends with nowhere to go.
+        wilburTerminal = wilburSessions[wilburSessions.length - 1];
+      }
     }),
+    // onDidCloseTerminal only fires when the TAB closes. A wilbur process
+    // that exits on its own leaves the tab open, so without this the
+    // singleton stayed pointed at a dead terminal until the window reloaded.
+    vscode.window.onDidChangeTerminalState
+      ? vscode.window.onDidChangeTerminalState((t) => {
+          if (t === wilburTerminal && isDeadTerminal(t)) {
+            wilburTerminal = null;
+          }
+        })
+      : { dispose: () => {} },
     statusBarItem,
     { dispose: () => clearInterval(statusBarPollHandle) }
   );

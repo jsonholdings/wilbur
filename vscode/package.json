@@ -2,15 +2,27 @@
   "name": "wilbur-vscode",
   "displayName": "Wilbur",
   "description": "Run Wilbur, the local offline coding agent (Ollama + a local model), in a VS Code terminal panel.",
-  "version": "0.4.0",
+  "version": "0.4.3",
   "icon": "media/icon.png",
   "publisher": "jsonholdings",
   "license": "Apache-2.0",
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Machine Learning", "Chat", "Other"],
-  "keywords": ["ai", "coding agent", "ollama", "local llm", "offline", "wilbur", "assistant"],
+  "categories": [
+    "Machine Learning",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "coding agent",
+    "ollama",
+    "local llm",
+    "offline",
+    "wilbur",
+    "assistant"
+  ],
   "galleryBanner": {
     "color": "#a8431c",
     "theme": "dark"
@@ -48,7 +60,7 @@
       },
       {
         "command": "wilbur.sessions",
-        "title": "Wilbur: Sessions…"
+        "title": "Wilbur: Sessions\u2026"
       },
       {
         "command": "wilbur.switchModel",
@@ -57,6 +69,16 @@
       {
         "command": "wilbur.sendProblems",
         "title": "Wilbur: Send problems in file"
+      },
+      {
+        "command": "wilbur.newSession",
+        "title": "Wilbur: New Session",
+        "category": "Wilbur"
+      },
+      {
+        "command": "wilbur.focusSession",
+        "title": "Wilbur: Focus Session",
+        "category": "Wilbur"
       }
     ],
     "menus": {
@@ -109,7 +131,11 @@
         },
         "wilbur.useFlatpakSpawn": {
           "type": "string",
-          "enum": ["auto", "on", "off"],
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
           "default": "auto",
           "description": "Whether to prefix wilbur with 'flatpak-spawn --host' to escape the VS Code Flatpak sandbox. 'auto' detects the sandbox via /.flatpak-info."
         },
@@ -120,7 +146,10 @@
         },
         "wilbur.approvalMode": {
           "type": "string",
-          "enum": ["manual", "auto"],
+          "enum": [
+            "manual",
+            "auto"
+          ],
           "default": "manual",
           "description": "'auto' passes --yes to wilbur, auto-approving its proposed actions. 'manual' (default) leaves wilbur's own approval prompts in place."
         },

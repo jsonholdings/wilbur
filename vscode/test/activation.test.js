@@ -227,3 +227,133 @@ test("wilbur.resumeLast is an explicit command, not something activate() calls o
   assert.equal(fake.createdTerminals.length, 1, "resumeLast only launches once explicitly invoked");
   assert.equal(fake.createdTerminals[0]._opts.isTransient, true);
 });
+
+/**
+ * Regression coverage for the 2026-09-20 bug the owner reported:
+ * "you can only open one session and when you exit that session you cant
+ * open a new one without closing and reopening vscode".
+ *
+ * Exiting wilbur is NOT closing the terminal. When the process ends, VS Code
+ * leaves the terminal open as a dead tab: `exitStatus` becomes defined,
+ * `onDidCloseTerminal` does NOT fire, and the terminal remains in
+ * `window.terminals`. The reuse check therefore saw a live-looking terminal
+ * and returned the corpse on every subsequent open, forever, because nothing
+ * cleared the singleton short of a window reload.
+ *
+ * The fix must survive the realistic sequence, which is what this asserts:
+ * open -> process exits (tab stays) -> open again must yield a NEW terminal.
+ */
+test("a second open after the wilbur process exits creates a NEW terminal", (t) => {
+  const { extension, fake } = loadExtensionWithFakeVscode();
+  activateAndTrack(t, extension);
+
+  const openFn = fake.registeredCommands.get("wilbur.open");
+  assert.ok(openFn, "wilbur.open must be registered");
+
+  openFn();
+  assert.equal(fake.createdTerminals.length, 1, "first open creates a terminal");
+  const first = fake.createdTerminals[0];
+
+  // Simulate the real failure mode: the process exits, but the tab lives on
+  // and VS Code still lists it. onDidCloseTerminal deliberately does NOT fire.
+  first.exitStatus = { code: 0 };
+  fake.vscode.window.terminals = [first];
+
+  openFn();
+  assert.equal(
+    fake.createdTerminals.length,
+    2,
+    "a dead terminal must be discarded, not reused -- this is the bug that " +
+      "forced a full VS Code restart between sessions"
+  );
+  assert.notEqual(fake.createdTerminals[1], first, "the second open must be a fresh terminal");
+});
+
+test("a live session is kept, and a second open joins it rather than replacing it", (t) => {
+  // Originally asserted reuse (one terminal). Reversed in 0.4.3: the owner
+  // wants Open to open. What still matters is that the FIRST session is not
+  // closed or clobbered when a second one starts -- both stay live.
+  const { extension, fake } = loadExtensionWithFakeVscode();
+  activateAndTrack(t, extension);
+
+  const openFn = fake.registeredCommands.get("wilbur.open");
+  openFn();
+  const first = fake.createdTerminals[0];
+  fake.vscode.window.terminals = [first]; // still running, no exitStatus
+
+  openFn();
+
+  assert.equal(fake.createdTerminals.length, 2, "the second open creates its own terminal");
+  assert.equal(
+    first._calls.dispose ? first._calls.dispose.length : 0,
+    0,
+    "the existing live session must NOT be disposed when another opens"
+  );
+});
+
+/**
+ * Multi-session coverage (owner, 2026-09-20: "a second session will not open
+ * either" / "can we add sessions and others?").
+ *
+ * Before 0.4.2 the extension held a single terminal and `wilbur.open`
+ * returned it forever, so concurrent sessions were impossible BY
+ * CONSTRUCTION -- not a bug in the reuse check, a missing capability.
+ * `wilbur.open` still reuses a healthy session on purpose (a keybinding
+ * should focus what you have, not spawn a pile); `wilbur.newSession` is the
+ * explicit "another one" path.
+ */
+test("wilbur.newSession opens an ADDITIONAL terminal alongside a live one", (t) => {
+  const { extension, fake } = loadExtensionWithFakeVscode();
+  activateAndTrack(t, extension);
+
+  fake.registeredCommands.get("wilbur.open")();
+  assert.equal(fake.createdTerminals.length, 1);
+  const first = fake.createdTerminals[0];
+  fake.vscode.window.terminals = [first]; // still alive
+
+  const newSession = fake.registeredCommands.get("wilbur.newSession");
+  assert.ok(newSession, "wilbur.newSession must be registered");
+  newSession();
+
+  assert.equal(
+    fake.createdTerminals.length,
+    2,
+    "newSession must create a second terminal even though the first is healthy"
+  );
+  assert.notEqual(fake.createdTerminals[1], first);
+});
+
+test("wilbur.open opens ANOTHER session when one is already live", (t) => {
+  // Reversed in 0.4.3. The 0.4.2 version of this test asserted that repeated
+  // opens reused the existing terminal -- my design call, and the owner
+  // overruled it after reporting three times that only one tab would ever
+  // open. A command called "Open" must open. Focusing an existing session is
+  // what wilbur.focusSession is for.
+  const { extension, fake } = loadExtensionWithFakeVscode();
+  activateAndTrack(t, extension);
+
+  const open = fake.registeredCommands.get("wilbur.open");
+  open();
+  const first = fake.createdTerminals[0];
+  fake.vscode.window.terminals = [first]; // still alive
+
+  open();
+  fake.vscode.window.terminals = [...fake.createdTerminals];
+  open();
+
+  assert.equal(
+    fake.createdTerminals.length,
+    3,
+    "each Open must yield its own terminal while the previous ones are alive"
+  );
+});
+
+test("wilbur.focusSession is registered and tolerates having no sessions", (t) => {
+  const { extension, fake } = loadExtensionWithFakeVscode();
+  activateAndTrack(t, extension);
+  const focus = fake.registeredCommands.get("wilbur.focusSession");
+  assert.ok(focus, "wilbur.focusSession must be registered");
+  return Promise.resolve(focus()).then((r) => {
+    assert.equal(r, undefined, "no sessions open must not throw");
+  });
+});
