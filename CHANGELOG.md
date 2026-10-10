@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.25.9
+
+New practice-loop tests: `tests/test_state_roundtrip.py`,
+`tests/test_doneclaim_helpers.py`, `tests/test_skills_tool.py` and two more cases in
+`tests/test_context_orphans.py`. No code changes.
+
 ## 2.25.8
 
 `scripts/sync_to_mirror.py --apply` now rebuilds the mirror from the allow-list plus
