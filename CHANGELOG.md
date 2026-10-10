@@ -3,6 +3,13 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.25.8
+
+`scripts/sync_to_mirror.py --apply` now rebuilds the mirror from the allow-list plus
+the mirror-only files, so a file outside the allow-list (such as a local `build/lib/`)
+is deleted instead of carried forward. New tests: `tests/test_transient_errors.py`
+(practice loop) and `tests/test_sync_mirror_prunes.py`.
+
 ## 2.25.7
 
 The sudo guard's loop variable is renamed from `token` to `word`: the mirror
