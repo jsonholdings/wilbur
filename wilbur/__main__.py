@@ -8,6 +8,7 @@ import sys
 from . import __version__, ui
 from .agent import Agent
 from .config import CONFIG_PATH, Config
+from .fake_backend import BACKENDS, FakeBackendError, check_backend
 from .models import ModelManager, fit_report, gpu_free_mb
 from .repl import Repl
 from .tools.base import Approval
@@ -24,6 +25,10 @@ PULL_SUGGESTIONS = (
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "loop":
+        from .loop import loop_main
+        return loop_main(argv[1:])
     parser = argparse.ArgumentParser(
         prog="wilbur", description="Local coding agent for the terminal.")
     parser.add_argument("prompt", nargs="*", help="run this prompt and exit")
@@ -33,6 +38,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-c", "--context", type=int, help="context window in tokens")
     parser.add_argument("-C", "--cwd", default=os.getcwd(), help="working directory")
     parser.add_argument("--url", help="Ollama base URL")
+    parser.add_argument("--backend", choices=BACKENDS,
+                        help="model backend: ollama (default) or fake (scripted "
+                             "replies from --fake-script, no model; for tests)")
+    parser.add_argument("--fake-script", metavar="FILE",
+                        help="JSON script of replies for --backend fake")
     parser.add_argument("--yes", action="store_true",
                         help="approve every tool call without prompting")
     parser.add_argument("--list-models", action="store_true",
@@ -59,8 +69,25 @@ def main(argv: list[str] | None = None) -> int:
         config.subagent_model = args.model
     if args.context:
         config.num_ctx = args.context
+    if args.backend:
+        config.backend = args.backend
+    if args.fake_script:
+        config.fake_script = args.fake_script
+    try:
+        backend = check_backend(config)
+    except FakeBackendError as exc:
+        print(ui.error(str(exc)), file=sys.stderr)
+        return 2
+    if backend == "fake":
+        # Loud on every run: a config.json left on `fake` must never pass for
+        # a working install.
+        print(ui.error(f"FAKE BACKEND: scripted replies from {config.fake_script}, "
+                       "no model is running"), file=sys.stderr)
 
     if args.list_models:
+        if backend == "fake":
+            print("fake backend: no models (scripted replies only)")
+            return 0
         return _list_models(config)
 
     prompt = args.oneshot or (" ".join(args.prompt) if args.prompt else "")
@@ -104,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"no saved session for {target}. --sessions lists what exists.")
             return 1
 
-    rc = _ensure_model(config)
+    rc = None if backend == "fake" else _ensure_model(config)
     if rc is not None:
         return rc
 

@@ -14,23 +14,9 @@ import pytest
 import wilbur.agent as agent_mod
 from wilbur.agent import Agent
 from wilbur.config import Config
+from wilbur.fake_backend import FakeClient
 from wilbur.llm import Reply, ToolCall
 from wilbur.tools.base import Approval
-
-
-class FakeClient:
-    """Returns queued replies, and records the messages it was sent."""
-
-    def __init__(self, replies):
-        self.replies = list(replies)
-        self.seen = []
-
-    def __call__(self, *a, **kw):
-        return self
-
-    def chat(self, messages, schema, **kw):
-        self.seen.append([dict(m) for m in messages])
-        return self.replies.pop(0) if self.replies else Reply(content="done", tool_calls=[])
 
 
 @pytest.fixture

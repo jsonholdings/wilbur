@@ -53,6 +53,11 @@ class RunState:
     plan: list[PlanItem] = field(default_factory=list)
     failures: list[Failure] = field(default_factory=list)
     verifications: list[str] = field(default_factory=list)
+    # Progress signals the stuck detector reads (wilbur.horizon): count of
+    # successful file writes/edits, and the signature of the last tool call so
+    # a run repeating the identical call registers as no progress.
+    writes: int = 0
+    last_tool: str = ""
 
     # -- plan -------------------------------------------------------------
     def set_plan(self, items: list[dict[str, Any]]) -> None:
@@ -150,4 +155,6 @@ class RunState:
         st.plan = [PlanItem(**i) for i in data.get("plan", [])]
         st.failures = [Failure(**f) for f in data.get("failures", [])]
         st.verifications = list(data.get("verifications", []))
+        st.writes = int(data.get("writes", 0))
+        st.last_tool = data.get("last_tool", "")
         return st

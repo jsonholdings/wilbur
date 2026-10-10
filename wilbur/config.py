@@ -18,10 +18,18 @@ HISTORY_PATH = Path(os.environ.get("WILBUR_HISTORY", Path.home() / ".config" / "
 USER_SKILLS_DIR = Path(os.environ.get("WILBUR_USER_SKILLS_DIR", Path.home() / ".config" / "wilbur" / "skills"))
 
 
+_NOT_SAVED = ("backend", "fake_script")
+
+
 @dataclass
 class Config:
     # --- model / endpoint ---
     base_url: str = "http://localhost:11434"
+    # "ollama" (the real thing) or "fake": scripted replies from `fake_script`
+    # with no model at all (wilbur.fake_backend), for tests and scripted runs.
+    # Never chosen automatically -- only by setting it here or --backend.
+    backend: str = "ollama"
+    fake_script: str = ""
     # Which card `nvidia-smi`'s per-row output the fit check reads -- the card
     # Ollama's `base_url` server will actually place a model on. 0 is the only
     # card on a single-GPU host; set alongside `base_url` when a second card
@@ -70,13 +78,49 @@ class Config:
     # Printed by the REPL (not the model) when a turn ends and nothing is left in
     # flight: no subagents running, nothing queued, no round limit hit.
     idle_signoff: bool = True
-    idle_signoff_text: str = "THANK YOU FOR THE SLOP \u2014 MAY I HAVE ANOTHER?"
+    idle_signoff_text: str = "TASK COMPLETE \u2014 CAN YOU SLOP THE TROUGH?"
 
     # --- team mode ---
     # "auto" sizes the gate itself (wilbur.team.needs_team): a trivial,
     # single-file ask runs single-agent; a multi-file or risky one gets the
     # plan -> code -> test -> review -> merge team. "on"/"off" override it.
     team_mode: str = "auto"
+    # /loop <goal>: loop turns and wall clock before Wilbur stops and reports.
+    loop_max_turns: int = 20
+    loop_max_minutes: int = 60
+    # Keep going (wilbur.keepgoing): a plain prompt whose turn ends with the
+    # model's own plan still open, or a "Next, I'll ..." with no tool call, is
+    # nudged on automatically. A question to the user, an approval that was
+    # refused, Ctrl-C, or a stuck run stops it. Off: auto_continue false, or
+    # /keepgoing off.
+    #
+    # The old 10-continue / 30-minute caps are gone as the default stop (owner,
+    # 2026-10-02: "if I tell him to work all night, he should do it"). They are
+    # still honoured when set > 0, for a user who wants a hard numeric limit;
+    # 0 means no cap and the run horizon + stuck detector bound it instead.
+    auto_continue: bool = True
+    auto_continue_max: int = 0            # 0 = no continue-count cap
+    auto_continue_max_minutes: int = 0    # 0 = no keep-going wall-clock cap
+
+    # Run horizon (wilbur.horizon): how long a long run may go. The default is
+    # until the task's todo plan is complete; a horizon the user states ("all
+    # night", "for 3 hours", "until done") overrides it; the safety maximum
+    # bounds even that. The stuck detector is the real safety net -- it stops
+    # a spinning run after this many consecutive turns with no progress.
+    run_safety_max_minutes: int = 12 * 60
+    stuck_limit: int = 5
+    # Never accept "done" without evidence (wilbur.doneclaim): a completion
+    # claim with plan items open, or "tests pass" with no test run, makes the
+    # harness run the project's own check -- pass ticks the plan and stops as
+    # COMPLETE, fail sends a specific nudge.
+    verify_done_claims: bool = True
+
+    # Durability (wilbur.repl long runs): commit a tested checkpoint to the
+    # current git branch every N auto-continues (never push), and write a
+    # progress log the user can read in the morning. 0 disables checkpoint
+    # commits.
+    checkpoint_commit_every: int = 10
+    progress_log: bool = True
     # Empty means the reviewer uses `model` too. If set, it is only used when
     # it fits free VRAM at review time (wilbur.team._reviewer_model), with a
     # logged fallback to `model` otherwise -- the GPU may be shared with
@@ -113,5 +157,15 @@ class Config:
         return cfg
 
     def save(self) -> None:
+        data = asdict(self)
+        # The backend is never persisted from a running session: a one-off
+        # `--backend fake` followed by /context or /model must not leave the
+        # config on the fake for every later run. Only a hand edit changes it.
+        on_disk = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
+        for key in _NOT_SAVED:
+            if key in on_disk:
+                data[key] = on_disk[key]
+            else:
+                data.pop(key, None)
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(json.dumps(asdict(self), indent=2))
+        CONFIG_PATH.write_text(json.dumps(data, indent=2))

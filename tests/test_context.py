@@ -104,6 +104,19 @@ def test_compaction_preserves_the_system_prompt():
     assert out[0]["content"] == "sys"
 
 
+def test_compaction_keeps_the_pinned_plan_briefing_verbatim():
+    # The todo plan rides in a harness briefing (BRIEFING_MARKER) pinned right
+    # after the system prompt; a long run must never let it be summarised away.
+    from wilbur.state import BRIEFING_MARKER
+    msgs = history(40)
+    briefing = {"role": "system",
+                "content": f"{BRIEFING_MARKER}\nPLAN (1/3):\n  [ ] 2. build the parser"}
+    msgs.insert(1, briefing)
+    out = compact(msgs, Summariser("what happened"), small_ctx())
+    assert out[1] is briefing or out[1]["content"] == briefing["content"]
+    assert "build the parser" in out[1]["content"]
+
+
 def test_compaction_inserts_a_marked_summary():
     out = compact(history(40), Summariser("what happened"), small_ctx())
     assert "[Earlier conversation, compacted]" in out[1]["content"]

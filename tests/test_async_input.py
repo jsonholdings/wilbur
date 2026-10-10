@@ -213,7 +213,7 @@ def test_queue_command_lists_and_clears(monkeypatch, tmp_path, capsys):
     assert repl._input_q.qsize() == 0
 
 
-SIGNOFF = "THANK YOU FOR THE SLOP — MAY I HAVE ANOTHER?"
+SIGNOFF = "TASK COMPLETE — CAN YOU SLOP THE TROUGH?"
 
 
 def test_signoff_only_after_the_last_queued_turn(monkeypatch, tmp_path, capsys):

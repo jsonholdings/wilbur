@@ -27,6 +27,13 @@ from . import registry
 from .models import ModelManager, fit_report, gpu_free_mb
 from .tools.base import Approval
 
+# Private build only: the public mirror ships without gpu_priority.py (see
+# scripts/sync_to_mirror.py), and then Wilbur behaves exactly as it always has.
+try:
+    from . import gpu_priority as _gpu_priority
+except ImportError:  # OSS build
+    _gpu_priority = None
+
 # Lines pasted back from this program's own UI (a tool-call bullet, a result
 # branch, or an approval prompt) must never be read as a new instruction. On
 # 2026-09-18 a batch of denied tool calls got pasted back into the prompt and
@@ -50,6 +57,9 @@ HELP = """  Model
   /team [on|off|auto]  team mode: plan -> code -> test -> review -> merge
 
   Session
+  /loop <goal>      keep working turn after turn until the goal is done and checked
+                    (caps: loop_max_turns, loop_max_minutes; Ctrl-C stops)
+  /keepgoing [on|off]  auto-continue a multi-item prompt between items (default on)
   /clear            start a fresh conversation
   /cost             tokens and timing for this session
   /queue            show commands typed and queued during the current turn
@@ -63,7 +73,7 @@ HELP = """  Model
 
 _SLASH_COMMANDS = (
     "/model", "/search", "/pull", "/context", "/turns", "/continue", "/tools",
-    "/approve", "/team", "/clear", "/cost", "/queue", "/queue clear", "/agents",
+    "/approve", "/team", "/loop", "/keepgoing", "/clear", "/cost", "/queue", "/queue clear", "/agents",
     "/help", "/exit",
 )
 
@@ -76,6 +86,11 @@ class Repl:
         self.approve_mode = "ask"
         self.stats = {"calls": 0, "in_tokens": 0, "out_tokens": 0, "seconds": 0.0}
         self.last_search: list = []   # results of the most recent /search, for `/pull N`
+        # The fake backend runs no model, so it never queues for the GPU: with
+        # no client every turn skips `_gpu_gate` and /override is not offered.
+        fake = getattr(config, "backend", "ollama") == "fake"
+        self._gp = _gpu_priority.load() if _gpu_priority and not fake else None
+        self._gpu_pending_line: str | None = None
 
         # Async input: a single background thread owns stdin and is the only
         # thing that ever calls sys.stdin.readline(). Lines it reads land in
@@ -90,6 +105,15 @@ class Repl:
         self._approval_q: "queue.Queue[str | None]" = queue.Queue()
         self._turn_active = threading.Event()
         self._turn_hit_limit = False
+        self._turn_refused = False      # an approval this turn was not granted
+        self._turn_tool_calls = 0
+        # Long-run horizon + stuck detector for the current user message,
+        # (re)built per message by `_begin_horizon`. Defaults here so
+        # `_keep_going` works when a test calls it directly.
+        from . import horizon as _horizon
+        self._horizon = _horizon.Horizon("until_done", None, config.run_safety_max_minutes)
+        self._stuck = _horizon.StuckDetector(limit=config.stuck_limit)
+        self._checkpoint_branch_done = False
         self._awaiting_approval = threading.Event()
         self._pump_thread: threading.Thread | None = None
 
@@ -453,6 +477,7 @@ class Repl:
             if (not sys.stdin.isatty() and self._pump_thread is None
                     and self._ptk_thread is None):
                 print(ui.error("  no interactive input available -- not approved"))
+                self._turn_refused = True
                 return Approval.UNAVAILABLE
             if self._use_ptk:
                 # The "allow?" text is the ptk prompt's own message (see
@@ -466,15 +491,20 @@ class Repl:
                 answer_line = self._approval_q.get()
             except KeyboardInterrupt:
                 print()
+                self._turn_refused = True
                 return Approval.INTERRUPTED
             if answer_line is None:
                 print()
+                self._turn_refused = True
                 return Approval.UNAVAILABLE
             answer = answer_line.strip().lower()
             if answer == "a":
                 self.approve_mode = "all"
                 return Approval.GRANTED
-            return Approval.GRANTED if answer in {"y", "yes"} else Approval.DENIED
+            if answer in {"y", "yes"}:
+                return Approval.GRANTED
+            self._turn_refused = True
+            return Approval.DENIED
         finally:
             self._awaiting_approval.clear()
             if spinner is not None:
@@ -487,6 +517,7 @@ class Repl:
             self.stats["out_tokens"] += data.get("tokens", 0)
             self.stats["seconds"] += data.get("seconds", 0.0)
         elif kind == "tool_start":
+            self._turn_tool_calls = getattr(self, "_turn_tool_calls", 0) + 1
             args = data["args"]
             summary = (args.get("command") or args.get("pattern")
                        or args.get("path") or args.get("description") or "")
@@ -500,6 +531,8 @@ class Repl:
             print(ui.notice(
                 f"compacted context: {data['before_tokens']:,} -> "
                 f"{data['after_tokens']:,} tokens"))
+        elif kind == "team_reviewer_model":
+            print(ui.notice(data.get("note", "")))
         elif kind == "limit":
             self._turn_hit_limit = True
             print(ui.error(f"hit the {data['turns']}-round limit"))
@@ -512,13 +545,15 @@ class Repl:
     # ---------------------------------------------------------------- #
 
     def run(self) -> int:
-        if not self.manager.available():
+        fake = getattr(self.config, "backend", "ollama") == "fake"
+        if not fake and not self.manager.available():
             print(ui.error(f"No Ollama at {self.config.base_url}."))
             print(ui.notice("Start it, or set base_url with /model after it is up."))
             return 1
 
         print(ui.banner(self.config.model, self.cwd, self.config.num_ctx))
-        self._warn_if_unsuitable(self.config.model)
+        if not fake:
+            self._warn_if_unsuitable(self.config.model)
         if self._use_ptk:
             self._start_ptk_pump()
         else:
@@ -560,13 +595,19 @@ class Repl:
             if self._is_git_repo() and team_mod.needs_team(line, self.config.team_mode):
                 self._run_team_turn(line)
                 continue
+            if not self._gpu_gate(line):
+                continue
             spinner = ui.Spinner(status_fn=self._agents_status_line, render=not self._use_ptk)
             self._spinner = spinner
             self._turn_active.set()
             self._turn_hit_limit = False
+            self._turn_refused = False
+            self._turn_tool_calls = 0
+            self._begin_horizon(line)
             try:
                 with spinner:
                     reply = self.agent.run(line)
+                    reply = self._keep_going(reply)
             except KeyboardInterrupt:
                 print(ui.notice("interrupted -- queued commands are kept"))
                 continue
@@ -576,6 +617,8 @@ class Repl:
             finally:
                 self._turn_active.clear()
                 self._spinner = None
+                if self._gp is not None:
+                    self._gp.release()  # idle between turns: hand the GPU back
             # Save after every exchange, not at exit. A session that only
             # persists on a clean quit is exactly the session you lose.
             self.sessions.save(self.session_id, self.cwd, self.agent.messages,
@@ -587,6 +630,218 @@ class Repl:
             if self._is_idle():
                 print(ui.signoff(self.config.idle_signoff_text))
                 print()
+
+    def _begin_horizon(self, line: str) -> None:
+        """Read a run horizon out of the user's message and reset the stuck
+        detector for the new task (wilbur.horizon)."""
+        from . import horizon as _horizon
+        self._horizon = _horizon.parse_horizon(line, self.config.run_safety_max_minutes)
+        self._stuck = _horizon.StuckDetector(limit=max(1, int(self.config.stuck_limit)))
+
+    def _keep_going(self, reply: str, clock=time.monotonic) -> str:
+        """Auto-continue a long run between work items (wilbur.keepgoing +
+        wilbur.horizon).
+
+        Runs inside the turn (spinner up, typed lines queue), so Ctrl-C lands
+        in run()'s KeyboardInterrupt handler like any turn.
+
+        The round cap is no longer a stop: when a continue hits `max_turns`
+        rounds, the agent's returned checkpoint (what's done / left / next) is
+        logged, the context was already compacted at 75%, and the run carries
+        on automatically (owner, 2026-10-02). The run continues until:
+          - the plan is complete / the model says it is done (keepgoing.decide),
+          - the horizon deadline (default: until done; or the stated duration;
+            always bounded by run_safety_max_minutes),
+          - the stuck detector trips (no meaningful progress for N turns),
+          - a question to the user, a refused/unanswered approval, Ctrl-C, a
+            line the user typed, or an explicit hold.
+        Optional hard numeric caps (auto_continue_max / _minutes) still apply
+        when set > 0. Never touches approvals.
+        """
+        from . import keepgoing, progress
+        if not getattr(self.config, "auto_continue", True):
+            return reply
+        cap = max(0, int(self.config.auto_continue_max))              # 0 = off
+        minute_cap = max(0.0, float(self.config.auto_continue_max_minutes))
+        start = clock()
+        horizon_deadline = start + 60 * float(self._horizon.minutes)
+        if self.config.progress_log and (self.state.plan or self._horizon.phrase):
+            self._log_progress("run started",
+                               f"horizon: {self._describe_horizon()}")
+        n = 0
+        while True:
+            if self._turn_refused or self.agent.cancel_event.is_set():
+                return reply
+            if any(q is not None for q in list(self._input_q.queue)):
+                return reply  # the user typed something: theirs runs next
+
+            if self._turn_hit_limit:
+                # The round cap: checkpoint + carry on, not a stop.
+                self._turn_hit_limit = False
+                print(ui.notice("round cap reached -- checkpoint saved, carrying on"))
+                self._log_progress("round-cap checkpoint", reply)
+                self._maybe_checkpoint_commit(n, forced=True)
+                nudge = keepgoing.NUDGE
+            else:
+                gate = self._done_claim_gate(reply)
+                if gate is not None and gate[0] == "complete":
+                    return gate[1]
+                if gate is not None:
+                    reason, nudge = "not verified done", gate[1]
+                else:
+                    decision = keepgoing.decide(reply, self.state,
+                                                worked=self._turn_tool_calls > 0)
+                    if not decision.go:
+                        if self.config.progress_log and n:
+                            self._log_progress("stopped", decision.reason)
+                        return reply
+                    reason, nudge = decision.reason, keepgoing.NUDGE
+                if cap and n >= cap:
+                    print(ui.notice(f"keep going: cap reached ({n}/{cap}) -- "
+                                     "type continue to carry on"))
+                    return reply
+                if minute_cap and (clock() - start) >= 60 * minute_cap:
+                    print(ui.notice("keep going: time cap reached -- type continue "
+                                     "to carry on"))
+                    return reply
+                if clock() >= horizon_deadline:
+                    print(ui.notice(f"horizon reached ({self._describe_horizon()}) "
+                                     "-- stopping; type continue to carry on"))
+                    self._log_progress("stopped", "horizon reached")
+                    return reply
+                if reply.strip():
+                    print()
+                    print(ui.assistant(reply))
+                tag = f"({n + 1}/{cap})" if cap else f"({n + 1})"
+                print(ui.notice(f"\u21bb continuing {tag} -- {reason}"))
+
+            n += 1
+            self._turn_tool_calls = 0
+            reply = self.agent.run(nudge)
+            self.sessions.save(self.session_id, self.cwd, self.agent.messages,
+                               self.state, self.config.model)
+            self._maybe_checkpoint_commit(n)
+
+            # Stuck detector: the safety net that replaced the numeric cap.
+            last_fail = self.state.failures[-1].what if self.state.failures else ""
+            if self._stuck.update(
+                files_changed=self.state.writes,
+                verifications=len(self.state.verifications),
+                last_error=last_fail if self._turn_tool_calls else "",
+                last_tool=self.state.last_tool,
+            ):
+                print(ui.notice("keep going: no further progress for "
+                                 f"{self._stuck.limit} turns -- stopping. "
+                                 f"{self._stuck.report()}"))
+                self._log_progress("stopped (stuck)", self._stuck.report())
+                return reply
+
+    def _done_claim_gate(self, reply: str) -> tuple[str, str] | None:
+        """Never accept "done" without evidence (wilbur.doneclaim).
+
+        Returns None when the reply needs no check (keepgoing.decide rules), or
+        ("complete", reply-with-evidence) when the harness's own check passed
+        and the model claimed completion (the plan is ticked), or
+        ("nudge", specific-nudge) when the check failed / files are missing /
+        the claim could not be verified.
+        """
+        from . import doneclaim, keepgoing
+        if not getattr(self.config, "verify_done_claims", True):
+            return None
+        text = (reply or "").strip()
+        if not text or text == "Cancelled by user.":
+            return None
+        if keepgoing.asks_user(reply) and not keepgoing.asks_to_proceed(reply):
+            return None  # a real question to the user: theirs to answer
+        if keepgoing._HOLDING.search(text[-300:]):
+            return None  # holding because the user said so: never push past it
+        open_items = doneclaim.open_items(self.state)
+        worked = self._turn_tool_calls > 0
+        claimed = doneclaim.claims_done(reply)
+        unverified = (doneclaim.claims_tests_pass(reply)
+                      and getattr(self.agent, "turn_test_runs", 0) == 0)
+        if unverified:
+            print(ui.notice("unverified claim: the reply says the tests pass, but "
+                            "no test command ran this turn -- checking"))
+            self._log_progress("unverified claim", text[-200:])
+        quiet_stop = (not worked and open_items
+                      and not keepgoing._NEXT_STEP.search(text[-600:]))
+        if not (unverified or (open_items and (claimed or quiet_stop))):
+            return None
+        verdict = doneclaim.check(self.cwd, self.state)
+        if verdict.ok and (claimed or unverified):
+            ticked = doneclaim.tick_all(self.state) if open_items else 0
+            self.state.record_verification(f"VERIFICATION PASSED -- {verdict.evidence()}")
+            evidence = (f"[verified] {verdict.evidence()}"
+                        + (f"; {ticked} open plan item(s) marked done" if ticked else ""))
+            print(ui.notice(f"COMPLETE -- {evidence}"))
+            self._log_progress("complete (verified)", evidence)
+            self.sessions.save(self.session_id, self.cwd, self.agent.messages,
+                               self.state, self.config.model)
+            note = "\n\n" + evidence
+            if unverified:
+                note = ("\n\n[harness] unverified claim -- no test command ran that "
+                        "turn; the harness ran it.") + note
+            return "complete", text + note
+        if verdict.ok:
+            return None  # quiet stop, check green, no claim: the usual rules
+        if verdict.passed is None and not open_items:
+            return None  # flagged above; nothing the harness can check
+        self._log_progress("not verified done",
+                           f"{verdict.label or 'no check'} passed={verdict.passed}; "
+                           f"missing={verdict.missing}")
+        return "nudge", verdict.nudge(unverified_claim=unverified)
+
+    def _describe_horizon(self) -> str:
+        h = self._horizon
+        if h.kind == "until_done":
+            return f"until done (safety max {int(h.safety_max_minutes)} min)"
+        mins = int(h.minutes)
+        phrase = f'"{h.phrase}"' if h.phrase else ""
+        return f"{phrase} ({mins} min)".strip()
+
+    def _log_progress(self, event: str, detail: str = "") -> None:
+        if not self.config.progress_log:
+            return
+        from . import progress
+        try:
+            progress.append(self.session_id, event, detail)
+        except Exception:
+            pass  # a progress log that fails must never end the run
+
+    def _maybe_checkpoint_commit(self, n: int, forced: bool = False) -> None:
+        """Commit a checkpoint of tested work to a wilbur run branch (never
+        push), every `checkpoint_commit_every` continues. Best-effort: any git
+        error is logged and swallowed so a long run is never killed by it."""
+        every = int(self.config.checkpoint_commit_every)
+        if every <= 0 or not self._is_git_repo():
+            return
+        if not forced and (n == 0 or n % every != 0):
+            return
+        import subprocess
+        try:
+            if not self._checkpoint_branch_done:
+                branch = f"wilbur/run-{self.session_id}"
+                cur = subprocess.run(["git", "-C", self.cwd, "rev-parse",
+                                      "--abbrev-ref", "HEAD"],
+                                     capture_output=True, text=True, timeout=10)
+                if cur.stdout.strip() and not cur.stdout.strip().startswith("wilbur/"):
+                    subprocess.run(["git", "-C", self.cwd, "checkout", "-b", branch],
+                                   capture_output=True, text=True, timeout=10)
+                self._checkpoint_branch_done = True
+            status = subprocess.run(["git", "-C", self.cwd, "status", "--porcelain"],
+                                    capture_output=True, text=True, timeout=10)
+            if not status.stdout.strip():
+                return
+            subprocess.run(["git", "-C", self.cwd, "add", "-u"],
+                           capture_output=True, text=True, timeout=15)
+            msg = f"wilbur checkpoint (continue {n}, session {self.session_id})"
+            subprocess.run(["git", "-C", self.cwd, "commit", "-m", msg, "--no-verify"],
+                           capture_output=True, text=True, timeout=20)
+            print(ui.notice(f"checkpoint committed: {msg}"))
+            self._log_progress("checkpoint committed", msg)
+        except Exception as exc:  # noqa: BLE001
+            self._log_progress("checkpoint commit failed", str(exc)[:160])
 
     def _is_idle(self) -> bool:
         """True only when the turn finished with nothing left in flight, so the
@@ -652,6 +907,10 @@ class Repl:
             return "exit"
         if cmd == "/help":
             print(HELP)
+            if self._gp is not None:
+                print("  /override         stop the GPU job blocking Wilbur (asks to confirm)")
+        elif cmd == "/override" and self._gp is not None:
+            self._override_command()
         elif cmd == "/model":
             self._model_command(arg)
         elif cmd == "/search":
@@ -676,6 +935,21 @@ class Repl:
                 print(ui.notice(f"current: {self.approve_mode}  (ask | auto-edit | all)"))
         elif cmd == "/team":
             self._team_command(arg)
+        elif cmd == "/loop":
+            self._loop_command(arg)
+        elif cmd == "/keepgoing":
+            if arg in {"on", "off"}:
+                self.config.auto_continue = arg == "on"
+            if not self.config.auto_continue:
+                print(ui.notice("keep going: off"))
+            else:
+                cap = self.config.auto_continue_max
+                mins = self.config.auto_continue_max_minutes
+                limit = (f"caps: {cap} continues / {mins} min" if (cap or mins)
+                         else f"runs until done or stuck (safety max "
+                              f"{self.config.run_safety_max_minutes // 60}h; "
+                              "say \"all night\" / \"for 3 hours\" to set a horizon)")
+                print(ui.notice(f"keep going: on -- {limit}"))
         elif cmd == "/clear":
             from .state import RunState
             self.state = RunState()
@@ -693,6 +967,40 @@ class Repl:
         return None
 
     # ---------------------------------------------------------------- #
+
+    def _gpu_gate(self, line: str) -> bool:
+        """Ask gpu-queue for priority before inference. False = turn parked."""
+        if self._gp is None:
+            return True
+        grant = self._gp.request(reason="terminal turn")
+        if grant.granted:
+            if not grant.absent:
+                self._gp.start_heartbeat()
+            return True
+        self._gpu_pending_line = line
+        print(ui.notice(_gpu_priority.describe_wait(
+            grant, override_hint="type /override to stop it, or resend when it finishes")))
+        return False
+
+    def _override_command(self) -> None:
+        status = self._gp.status()
+        holders = status.get("holders") or []
+        what = ", ".join(" ".join(str(h.get(k) or "") for k in ("app", "process")).strip()
+                         for h in holders if isinstance(h, dict)) or "the current GPU job"
+        print(ui.notice(f"This stops {what}. Type 'yes' to confirm."))
+        answer = (self._next_line() or "").strip().lower()
+        if answer != "yes":
+            print(ui.notice("override cancelled"))
+            return
+        grant = self._gp.override()
+        if not grant.granted:
+            print(ui.error(_gpu_priority.describe_override_result(grant)))
+            return
+        print(ui.success("GPU priority granted"))
+        pending, self._gpu_pending_line = self._gpu_pending_line, None
+        if pending:
+            print(ui.notice("resend your last message to run it now"))
+            self._gpu_pending_line = pending
 
     def _agents_status_line(self) -> str:
         from .tools import agents_registry
@@ -718,6 +1026,53 @@ class Repl:
 
     def _is_git_repo(self) -> bool:
         return os.path.isdir(os.path.join(self.cwd, ".git"))
+
+    def _loop_command(self, goal: str) -> None:
+        """`/loop <goal>`: re-prompt the same agent until the done-check passes.
+
+        The done-check is the model's GOAL COMPLETE marker plus the project's
+        own check (wilbur.verify) when it has one. Capped by loop_max_turns and
+        loop_max_minutes; Ctrl-C stops it and keeps the transcript.
+        """
+        from . import loop as loop_mod
+        if not goal:
+            print(ui.error("usage: /loop <goal>"))
+            return
+        if not self._gpu_gate(goal):
+            return
+        extra = self.agent.messages[0]
+        if extra.get("role") == "system" and loop_mod.LOOP_SYSTEM not in extra["content"]:
+            extra["content"] += "\n\n" + loop_mod.LOOP_SYSTEM
+        print(ui.notice(f"loop: up to {self.config.loop_max_turns} turns / "
+                         f"{self.config.loop_max_minutes} min; Ctrl-C stops"))
+        self._turn_active.set()
+
+        def on_turn(turn: int, reply: str) -> None:
+            self.sessions.save(self.session_id, self.cwd, self.agent.messages,
+                               self.state, self.config.model)
+            if reply.strip():
+                print(ui.assistant(reply))
+            print(ui.notice(f"loop: turn {turn} finished"))
+        try:
+            result = loop_mod.run_goal_loop(
+                self.agent, goal, max_turns=self.config.loop_max_turns,
+                max_seconds=self.config.loop_max_minutes * 60,
+                check=loop_mod.project_check(self.cwd), on_turn=on_turn)
+        except KeyboardInterrupt:
+            self.agent.cancel_event.clear()
+            print(ui.notice("loop stopped (Ctrl-C) -- the conversation is kept"))
+            return
+        except Exception as exc:
+            print(ui.error(f"loop failed: {type(exc).__name__}: {exc}"))
+            return
+        finally:
+            self._turn_active.clear()
+            if self._gp is not None:
+                self._gp.release()
+        line = (f"loop: {result.status} after {result.turns} turn(s), "
+                f"{result.seconds / 60:.1f} min" + (f" -- {result.check}" if result.check else ""))
+        print(ui.success(line) if result.ok else ui.error(line))
+        print()
 
     def _team_command(self, arg: str) -> None:
         arg = arg.strip().lower()

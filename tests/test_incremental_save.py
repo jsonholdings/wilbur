@@ -16,20 +16,10 @@ import pytest
 import wilbur.agent as agent_mod
 from wilbur.agent import Agent
 from wilbur.config import Config
+from wilbur.fake_backend import FakeClient
 from wilbur.llm import Reply, ToolCall
 from wilbur.repl import Repl
 from wilbur.tools.base import Approval
-
-
-class FakeClient:
-    def __init__(self, replies):
-        self.replies = list(replies)
-
-    def __call__(self, *a, **kw):
-        return self
-
-    def chat(self, messages, schema, **kw):
-        return self.replies.pop(0) if self.replies else Reply(content="done", tool_calls=[])
 
 
 def call(name, **args):

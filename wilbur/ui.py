@@ -41,11 +41,18 @@ def width() -> int:
 
 
 def banner(model: str, cwd: str, ctx: int, speed: str = "") -> str:
+    # The running version goes in the box on purpose. Wilbur is installed
+    # editable, so the code is whatever the source tree held when the process
+    # STARTED -- a fresh `wilbur --version` can report a newer build than the
+    # session you are sitting in. Printing it on load makes the version you are
+    # actually running visible without a second command.
+    from . import __version__
     w = width()
     art = wordmark(w - 2, colour=not _NO_COLOR)
     inner = w - 4
     lines = [
-        c(f"{BULLET} Wilbur", ACCENT, BOLD) + c("  local coding agent", GREY),
+        c(f"{BULLET} Wilbur", ACCENT, BOLD) + c(f" v{__version__}", GREY)
+        + c("  local coding agent", GREY),
         "",
         c("model  ", GREY) + model + (c(f"  ({speed})", GREY) if speed else ""),
         c("context", GREY) + f"  {ctx:,} tokens",

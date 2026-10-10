@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from .config import Config
 from .context import estimate_tokens, compact
+from .fake_backend import make_client
 from .llm import OllamaClient, ToolCall
 from .state import BRIEFING_MARKER, RunState
 from .tools import ToolContext, build_registry, to_schema
@@ -41,6 +42,22 @@ Working rules:
 - Split a long task into small, numbered, independently-testable chunks before
   starting; verify each chunk with a real command before moving to the next,
   rather than attempting the whole task in one unbroken run.
+
+Safety rules (the owner's global rules that apply to any coding agent):
+- Name exact targets. Never delete, kill, reset or overwrite by pattern, glob or
+  "all": no `rm -rf` on a glob, `pkill -f`, `git add -A`/`git add .`,
+  `git reset --hard`, `git clean`, `git stash` or `git checkout -- .`. Stage only
+  the files you changed, by path.
+- Chain dependent steps with `&&`, never `;`, so a later step (commit, push)
+  runs only if the checks before it passed. Do not pipe a test run into
+  `tail`/`head` when you need its exit code.
+- Never print, log or commit a secret value (keys, tokens, passwords, .env
+  contents). Refer to where it lives instead.
+- Do not push, deploy, send mail or spend money unless the user asked for it.
+- A check that could not run is not a pass. Say which a result is: verified
+  (you ran it just now), unknown (could not check, and why), or assumed.
+- When a version-carrying file changes, bump the version and every place that
+  shows it in the same change.
 
 Be concise. Report what you did and what it means, not how you went about it.
 When you have finished the task, say so plainly and stop calling tools."""
@@ -82,8 +99,11 @@ class Agent:
         # before each tool call is what actually stops it -- setting it is
         # the caller's job (Task.run's KeyboardInterrupt handler).
         self.cancel_event = cancel if cancel is not None else threading.Event()
-        self.client = OllamaClient(config.base_url, model or config.model,
-                                   config.request_timeout)
+        self.turn_test_runs = 0
+        # OllamaClient is looked up here, at call time, so a test that patches
+        # wilbur.agent.OllamaClient still takes effect; `backend: fake` in the
+        # config selects the scripted client instead (wilbur.fake_backend).
+        self.client = make_client(config, model or config.model, ollama_cls=OllamaClient)
         registry = build_registry(include_task=include_task)
         if tool_names is not None:
             registry = {k: v for k, v in registry.items() if k in tool_names}
@@ -106,6 +126,10 @@ class Agent:
             self.state.objective = user_input
         self.messages.append({"role": "user", "content": user_input})
         final = ""
+        empty_retries = 0
+        # Test commands run in this call (the model's or the harness's own):
+        # the claims guard (wilbur.doneclaim) reads it.
+        self.turn_test_runs = 0
 
         for turn in range(self.config.max_turns):
             if self.cancel_event.is_set():
@@ -139,9 +163,29 @@ class Agent:
             self.on_event("message", {})
 
             if not reply.tool_calls:
-                final = reply.content
+                # Stall (b), diagnosed 2026-10-02: a thinking-capable local
+                # model (qwen3) sometimes returns a message with everything in
+                # `thinking` and an EMPTY `content` and no tool calls. The old
+                # loop broke here with final="" -- a turn that ended with no
+                # reply at all and nothing for keep-going to act on, so the
+                # session just went silent. Nudge once for a concrete answer or
+                # next action before giving up; if it is still empty, surface
+                # the thinking rather than nothing.
+                if not (reply.content or "").strip() and empty_retries < 1:
+                    empty_retries += 1
+                    self.on_event("empty_reply", {"had_thinking": bool(reply.thinking)})
+                    self.messages.append({
+                        "role": "user",
+                        "content": ("Your last reply was empty. Either take the next "
+                                    "concrete action with a tool, or state plainly what "
+                                    "you did, what is left, and the next step. Do not "
+                                    "reply with an empty message."),
+                    })
+                    continue
+                final = reply.content or (reply.thinking or "").strip()
                 break
 
+            empty_retries = 0
             cancelled_mid_round = False
             for call in reply.tool_calls:
                 if self.cancel_event.is_set():
@@ -222,6 +266,8 @@ class Agent:
         if check is None:
             return None
         passed, output = verify.run(check, self.cwd)
+        if passed is not None:
+            self.turn_test_runs = getattr(self, "turn_test_runs", 0) + 1
         line = verify.summarise(check, passed, output)
         self.state.record_verification(line.splitlines()[0])
         if passed is False:
@@ -290,6 +336,13 @@ class Agent:
             "seconds": time.time() - started,
         })
 
+        if call.name == "run_tests":
+            self.turn_test_runs = getattr(self, "turn_test_runs", 0) + 1
+        elif call.name == "run_bash":
+            from .doneclaim import is_test_command
+            if is_test_command(str((call.arguments or {}).get("command", ""))):
+                self.turn_test_runs = getattr(self, "turn_test_runs", 0) + 1
+
         # A tool that failed is a dead end worth remembering. Local models will
         # otherwise reissue the identical call; the ledger lets the next
         # briefing say so instead of watching it happen again.
@@ -302,6 +355,11 @@ class Agent:
                         f"\n\n[harness] This is attempt {n} at the same call and it has "
                         f"failed every time. Change the approach rather than retrying.")
             return result.output
+
+        # Progress signals for the stuck detector (wilbur.horizon).
+        self.state.last_tool = f"{call.name}({self._arg_signature(call)})"
+        if call.name in WRITE_TOOLS:
+            self.state.writes += 1
 
         # A successful write is the moment to check the project still builds.
         if call.name in WRITE_TOOLS:
