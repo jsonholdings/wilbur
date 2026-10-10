@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.25.10
+
+Ten practice-loop test files: catalog search, fit report, GPU VRAM parsing, file
+resolution, the ListFiles, Glob, Grep and Bash tools (edge cases), shell program tokens and
+UI rendering. No code changes.
+
 ## 2.25.9
 
 New practice-loop tests: `tests/test_state_roundtrip.py`,
