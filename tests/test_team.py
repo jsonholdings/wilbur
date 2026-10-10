@@ -142,7 +142,7 @@ def test_worktree_cleanup_after_merge(repo, fake_client_factory):
     assert not wt_path.exists()
 
 
-def test_role_timeout_returns_cleanly(repo, monkeypatch):
+def test_role_timeout_returns_cleanly(repo, monkeypatch, release_stuck):
     import wilbur.agent as agent_mod
 
     class HangingClient:
@@ -150,7 +150,7 @@ def test_role_timeout_returns_cleanly(repo, monkeypatch):
             return self
 
         def chat(self, *a, **kw):
-            time.sleep(2)
+            release_stuck.wait(2)
             return say("too slow")
 
     monkeypatch.setattr(agent_mod, "OllamaClient", HangingClient())
@@ -203,7 +203,7 @@ def test_timed_out_role_stops_calling_the_model(repo, monkeypatch):
     assert result.role_seconds and result.role_seconds[0][0] == "planner"
 
 
-def test_caller_cancel_stops_the_team(repo, monkeypatch):
+def test_caller_cancel_stops_the_team(repo, monkeypatch, release_stuck):
     import threading
     import wilbur.agent as agent_mod
 

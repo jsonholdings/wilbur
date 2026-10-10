@@ -44,23 +44,27 @@ def _wait_until(predicate, timeout=5.0) -> None:
     raise AssertionError("condition never became true")
 
 
-def _join_pump(repl: Repl) -> None:
-    """Wait for the pump thread to actually finish before the test ends --
-    call after the `create_pipe_input()` `with` block has exited, so its
-    `close()` has already sent the pump's `EOFError` exit path.
+def _stop_pump(repl: Repl, pipe_input) -> None:
+    """End the pump through its own Ctrl-D exit path and wait for the thread
+    to finish, while the pipe is still open -- call as the last step inside
+    the `create_pipe_input()` block.
 
-    prompt_toolkit's `run_in_terminal` keeps a single MODULE-LEVEL pending
-    future to serialise nested calls across every `Application`, regardless
-    of which thread or event loop created it -- not thread-local. A pump
-    thread abandoned mid-prompt (the common case: a daemon thread still
-    blocked in `session.prompt()` when the test function returns) can leave
-    that future attached to its own now-dead event loop; the next test's
-    pump then awaits it from a different loop and raises `RuntimeError: ...
-    attached to a different loop`. Letting each pump run its own exit path
-    to completion avoids that cross-test leak.
+    Closing the pipe under a running prompt does NOT stop the pump: the
+    close unregisters the fd while prompt_toolkit's reader is still attached
+    (`KeyError: '<fd> is not registered'`, "Task exception was never
+    retrieved"), and the thread stays blocked in `prompt_async`. That live
+    pump kept prompt_toolkit's MODULE-LEVEL `run_in_terminal` future bound to
+    its own event loop, so a later test's pump could await it from another
+    loop and fail (`RuntimeError: ... attached to a different loop`) -- the
+    load-dependent flake in `test_ptk_pump_two_commands_queue_during_a_turn`.
+    Ctrl-D at an empty prompt raises `EOFError`, which `_ptk_pump` handles by
+    returning, so the join below waits on that event, not on a fixed time.
     """
-    if repl._ptk_thread is not None:
-        repl._ptk_thread.join(timeout=2.0)
+    if repl._ptk_thread is None:
+        return
+    pipe_input.send_text("\x04")
+    repl._ptk_thread.join(timeout=10.0)
+    assert not repl._ptk_thread.is_alive(), "ptk pump did not exit on Ctrl-D"
 
 
 def _make_repl(monkeypatch, tmp_path, client) -> Repl:
@@ -81,7 +85,7 @@ def test_ptk_pump_queues_a_typed_line(monkeypatch, tmp_path):
         pipe_input.send_text("hello world\n")
         _wait_until(lambda: repl._input_q.qsize() >= 1)
         assert list(repl._input_q.queue) == ["hello world"]
-    _join_pump(repl)
+        _stop_pump(repl, pipe_input)
 
 
 def test_ptk_pump_two_commands_queue_during_a_turn(monkeypatch, tmp_path):
@@ -110,7 +114,7 @@ def test_ptk_pump_two_commands_queue_during_a_turn(monkeypatch, tmp_path):
         repl._turn_active.clear()
 
         assert list(repl._input_q.queue) == ["second", "third"]
-    _join_pump(repl)
+        _stop_pump(repl, pipe_input)
 
 
 def test_ptk_pump_approval_flow_round_trips(monkeypatch, tmp_path):
@@ -132,7 +136,7 @@ def test_ptk_pump_approval_flow_round_trips(monkeypatch, tmp_path):
         threading.Thread(target=_answer_after_prompt_starts, daemon=True).start()
         outcome = repl._approve("run_bash", "echo hi")
         assert outcome is Approval.GRANTED
-    _join_pump(repl)
+        _stop_pump(repl, pipe_input)
 
 
 def test_falls_back_to_the_old_pump_off_a_tty(monkeypatch, tmp_path):

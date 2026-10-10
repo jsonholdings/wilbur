@@ -14,6 +14,7 @@ import os
 import signal
 import sys
 import threading
+import time
 import warnings
 from pathlib import Path
 
@@ -282,3 +283,20 @@ def _fresh_fake_backend(_no_leaked_state):
 def _no_live_gpu_queue(monkeypatch):
     """Never let a test reach the workstation's live gpu-queue (8791)."""
     monkeypatch.setenv("WILBUR_GPU_PRIORITY", "0")
+
+
+@pytest.fixture
+def release_stuck():
+    """For tests that deliberately leave a worker stuck past a timeout: the
+    stuck worker blocks on this Event instead of a fixed sleep, and teardown
+    releases it and joins every thread the test started, so none outlives the
+    test (a sleeping worker otherwise wakes mid-way through a later test)."""
+    threads_before = set(threading.enumerate())
+    release = threading.Event()
+    yield release
+    release.set()
+    deadline = time.monotonic() + 10.0
+    for t in _new_threads(threads_before):
+        t.join(timeout=max(0.0, deadline - time.monotonic()))
+    still = [t.name for t in _new_threads(threads_before)]
+    assert not still, f"threads still running after release: {still}"

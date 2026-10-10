@@ -146,7 +146,7 @@ def test_successful_report_is_returned(ctx):
 # hang protection: a subagent that never returns must not hang the CLI
 
 
-def test_stuck_subagent_times_out_instead_of_hanging(ctx):
+def test_stuck_subagent_times_out_instead_of_hanging(ctx, release_stuck):
     """Owner report 2026-09-18: "the wilbur cli spawns agents and never
     returns". sub.run() is called synchronously inside this tool call with
     no other bound on it, so a subagent stuck in a slow/CPU-spilled model
@@ -155,7 +155,7 @@ def test_stuck_subagent_times_out_instead_of_hanging(ctx):
     (an error ToolResult) within that budget instead of blocking forever."""
     class HangingSub(FakeSub):
         def run(self, prompt):
-            time.sleep(5)  # far longer than the test's configured timeout
+            release_stuck.wait(5)  # held far past the test's configured timeout
             return "too late"
 
     import wilbur.agent as am
@@ -295,12 +295,12 @@ def test_successful_run_registers_and_finishes_as_done(ctx):
     assert agents_registry.running() == []
 
 
-def test_timed_out_subagent_is_recorded_as_timeout(ctx):
+def test_timed_out_subagent_is_recorded_as_timeout(ctx, release_stuck):
     from wilbur.tools import agents_registry
 
     class HangingSub(FakeSub):
         def run(self, prompt):
-            time.sleep(5)
+            release_stuck.wait(5)
             return "too late"
 
     import wilbur.agent as am

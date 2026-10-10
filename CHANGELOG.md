@@ -3,6 +3,15 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.25.11
+
+Deterministic test suite. The ptk pump tests stop the pump with Ctrl-D and join it
+instead of closing the pipe under a running prompt, which left the pump alive and
+broke a later test. The sign-off tests wait for the main loop to block for its next
+command, so `/exit` can no longer reach the queue before the sign-off decision.
+Every stdin, pty, subagent and team-role thread a test starts is now stopped and
+joined in teardown, and a leaked thread fails the test (`pytest.ini`). No code changes.
+
 ## 2.25.10
 
 Ten practice-loop test files: catalog search, fit report, GPU VRAM parsing, file

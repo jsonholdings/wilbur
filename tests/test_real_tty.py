@@ -22,7 +22,36 @@ import wilbur.agent as agent_mod
 from wilbur.config import Config
 from wilbur.repl import Repl
 
+import pytest
+
 from conftest import FakeClient, say
+
+_CONTROLLER_FDS: list[int] = []
+
+
+@pytest.fixture(autouse=True)
+def _settle_pty_pumps():
+    """Stop each test's pump through its own exit path (finish any partial
+    line, then Ctrl-D at an empty line), join every thread the test started,
+    then close the controller side -- so no cbreak pump outlives its test."""
+    threads_before = set(threading.enumerate())
+    yield
+    fds = list(_CONTROLLER_FDS)
+    _CONTROLLER_FDS.clear()
+    for fd in fds:
+        try:
+            os.write(fd, b"\n\x04")
+        except OSError:
+            pass
+    deadline = time.monotonic() + 10.0
+    for t in threading.enumerate():
+        if t not in threads_before and t is not threading.current_thread():
+            t.join(timeout=max(0.0, deadline - time.monotonic()))
+    for fd in fds:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def _wait_until(predicate, timeout=5.0) -> None:
@@ -36,6 +65,7 @@ def _wait_until(predicate, timeout=5.0) -> None:
 
 def _make_pty_repl(monkeypatch, tmp_path, client):
     controller_fd, follower_fd = pty.openpty()
+    _CONTROLLER_FDS.append(controller_fd)
     # A real terminal has stdin and stdout as the same device, and the pump's
     # echo-on-cbreak path writes to sys.stdout -- wire it to the same pty so
     # the echo is observable on the controller side, same as a real terminal.

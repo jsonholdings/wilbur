@@ -23,7 +23,30 @@ from wilbur.config import Config
 from wilbur.llm import Reply
 from wilbur.repl import Repl
 
+import pytest
+
 from conftest import FakeClient, say
+
+_WRITE_FDS: list[int] = []
+
+
+@pytest.fixture(autouse=True)
+def _settle_pump_threads():
+    """Close each test's stdin pipe and join every thread it started (the
+    stdin pump, the `repl.run` thread), so no pump outlives its test and
+    reads or prints into a later one. Closing the write end gives the pump
+    its EOF exit path; the join waits on that event, not on a fixed time."""
+    threads_before = set(threading.enumerate())
+    yield
+    while _WRITE_FDS:
+        try:
+            os.close(_WRITE_FDS.pop())
+        except OSError:
+            pass
+    deadline = time.monotonic() + 10.0
+    for t in threading.enumerate():
+        if t not in threads_before and t is not threading.current_thread():
+            t.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
 class _GatedClient(FakeClient):
@@ -44,11 +67,30 @@ class _GatedClient(FakeClient):
 
 def _make_repl(monkeypatch, tmp_path, client) -> tuple[Repl, "os._wrap_close"]:
     r_fd, w_fd = os.pipe()
+    _WRITE_FDS.append(w_fd)
     monkeypatch.setattr(sys, "stdin", os.fdopen(r_fd))
     monkeypatch.setattr(agent_mod, "OllamaClient", client)
     repl = Repl(Config(), str(tmp_path))
     repl.manager.available = lambda: True
     return repl, w_fd
+
+
+def _count_idle_waits(repl: Repl) -> list[int]:
+    """Count each time the main loop blocks for its next command. The loop
+    prints the sign-off (or decides not to) BEFORE it blocks again, so
+    waiting on this count is the exact point the sign-off decision is made --
+    unlike `_turn_active` clearing, which happens before `_is_idle()` runs,
+    leaving a window where a test's `/exit` could land in the queue first and
+    suppress the sign-off."""
+    calls = [0]
+    real_next_line = repl._next_line
+
+    def counting_next_line():
+        calls[0] += 1
+        return real_next_line()
+
+    repl._next_line = counting_next_line
+    return calls
 
 
 def _run_in_thread(repl: Repl) -> threading.Thread:
@@ -222,6 +264,7 @@ def test_signoff_only_after_the_last_queued_turn(monkeypatch, tmp_path, capsys):
     gate = threading.Event()
     client = _GatedClient([say("first done"), say("second done"), say("third done")], gate)
     repl, w_fd = _make_repl(monkeypatch, tmp_path, client)
+    idle_waits = _count_idle_waits(repl)
     t = _run_in_thread(repl)
     _wait_until(lambda: repl._pump_thread is not None)
     os.write(w_fd, b"first\n")
@@ -230,7 +273,8 @@ def test_signoff_only_after_the_last_queued_turn(monkeypatch, tmp_path, capsys):
     os.write(w_fd, b"third\n")
     _wait_until(lambda: repl._input_q.qsize() >= 2)
     gate.set()
-    _wait_until(lambda: len(client.seen) == 3 and not repl._turn_active.is_set())
+    # initial wait + one after each of the three turns
+    _wait_until(lambda: idle_waits[0] >= 4)
     os.write(w_fd, b"/exit\n")
     t.join(timeout=5)
     out = capsys.readouterr().out
@@ -244,10 +288,11 @@ def test_signoff_suppressed_when_disabled_or_limit_hit(monkeypatch, tmp_path, ca
     client = _GatedClient([say("done")], gate)
     repl, w_fd = _make_repl(monkeypatch, tmp_path, client)
     repl.config.idle_signoff = False
+    idle_waits = _count_idle_waits(repl)
     t = _run_in_thread(repl)
     _wait_until(lambda: repl._pump_thread is not None)
     os.write(w_fd, b"go\n")
-    _wait_until(lambda: len(client.seen) == 1 and not repl._turn_active.is_set())
+    _wait_until(lambda: idle_waits[0] >= 2)
     os.write(w_fd, b"/exit\n")
     t.join(timeout=5)
     assert SIGNOFF not in capsys.readouterr().out
