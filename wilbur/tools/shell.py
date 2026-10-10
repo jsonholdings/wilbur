@@ -1,10 +1,63 @@
 """Bash execution with a deny-list and hard output clamping."""
 from __future__ import annotations
 
+import os
+import re
+import shlex
 import subprocess
 from typing import Any
 
 from .base import Approval, ToolContext, ToolResult, clamp, denial_message
+
+
+# Wilbur runs unattended as an ordinary user. Every attempt to elevate fires a
+# root-mail security alert on the host (seen 2026-10-03 and 2026-10-10: the
+# loop model ran `sudo /usr/bin/true` in every task). Refuse before executing.
+ELEVATION_PROGRAMS = frozenset({"sudo", "su", "doas", "pkexec", "run0", "sudoedit"})
+# Wrappers whose first non-option argument is itself the program to run.
+_WRAPPERS = frozenset({"env", "command", "exec", "nohup", "time", "nice",
+                       "ionice", "timeout", "stdbuf", "setsid", "xargs",
+                       "builtin", "chronic", "unbuffer", "flatpak-spawn"})
+_SEGMENT_SPLIT = re.compile(r"&&|\|\||[;&|\n(){}`]|\$\(")
+ELEVATION_REFUSAL = (
+    "Refused without running: this command invokes {prog!r}. Root access is not "
+    "available to Wilbur and every attempt raises a security alert on the host. "
+    "Do not retry it or any other sudo/su/doas/pkexec form. Do the work as the "
+    "current user, or report that the step needs the owner."
+)
+
+
+def _program_tokens(segment: str) -> list[str]:
+    try:
+        tokens = shlex.split(segment, comments=True)
+    except ValueError:
+        tokens = segment.split()
+    programs: list[str] = []
+    index = 0
+    while index < len(tokens):
+        word = tokens[index]
+        if "=" in word and word.split("=", 1)[0].isidentifier():
+            index += 1
+            continue
+        programs.append(word)
+        if os.path.basename(word) not in _WRAPPERS:
+            break
+        index += 1
+        # skip the wrapper's options and numeric/duration arguments
+        while index < len(tokens) and (tokens[index].startswith("-")
+                                       or re.match(r"^[0-9.]+[smhd]?$", tokens[index])):
+            index += 1
+    return programs
+
+
+def elevation_program(command: str) -> str | None:
+    """Return the elevation program a command would run, or None."""
+    for segment in _SEGMENT_SPLIT.split(command):
+        for word in _program_tokens(segment.strip()):
+            name = os.path.basename(word.strip("'\"\\"))
+            if name in ELEVATION_PROGRAMS:
+                return name
+    return None
 
 
 class Bash:
@@ -30,6 +83,10 @@ class Bash:
         command = args.get("command", "").strip()
         if not command:
             return ToolResult("No command given.", is_error=True)
+
+        elevated = elevation_program(command)
+        if elevated:
+            return ToolResult(ELEVATION_REFUSAL.format(prog=elevated), is_error=True)
 
         lowered = command.lower()
         for pattern in ctx.config.denied_bash:

@@ -53,6 +53,9 @@ Safety rules (the owner's global rules that apply to any coding agent):
   `tail`/`head` when you need its exit code.
 - Never print, log or commit a secret value (keys, tokens, passwords, .env
   contents). Refer to where it lives instead.
+- Never run sudo, su, doas or pkexec. You have no root access; every attempt
+  is refused and raises a security alert. Work as the current user, or report
+  that the step needs the owner.
 - Do not push, deploy, send mail or spend money unless the user asked for it.
 - A check that could not run is not a pass. Say which a result is: verified
   (you ran it just now), unknown (could not check, and why), or assumed.

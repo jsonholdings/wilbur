@@ -12,7 +12,8 @@ def test_every_agent_carries_the_safety_rules(make_agent):
     agent.run("hi")
     system = client.seen[0][0]["content"]
     for rule in ("Name exact targets", "git add -A", "`&&`, never `;`",
-                 "Never print, log or commit a secret", "verified", "bump the version"):
+                 "Never print, log or commit a secret", "verified", "bump the version",
+                 "Never run sudo, su, doas or pkexec"):
         assert rule in system, rule
 
 
