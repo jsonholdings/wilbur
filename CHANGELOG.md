@@ -3,6 +3,15 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.25.12
+
+Fixed the last timing flake. `test_repeated_identical_done_claims_still_trip_the_stuck_detector`
+ran five real pytest subprocesses inside the 10 s thread-join cap of the keep-going
+harness; at load 8 that took up to 8 s. The test now refutes each claim with a
+stubbed `verify.run` (0.35 s under the same load); the real subprocess path stays
+covered by the other done-claim tests.
+
+
 ## 2.25.11
 
 Deterministic test suite. The ptk pump tests stop the pump with Ctrl-D and join it

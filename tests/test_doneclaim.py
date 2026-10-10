@@ -152,6 +152,10 @@ def test_claims_guard_flags_tests_pass_with_no_test_run(monkeypatch, tmp_path, c
 
 def test_repeated_identical_done_claims_still_trip_the_stuck_detector(monkeypatch, tmp_path, capsys):
     _pytest_check(monkeypatch)
+    # Refute every claim without spawning pytest: five real subprocess runs took
+    # up to 8 s at load 8, against the 10 s join cap in _run (flake, 2026-10-10).
+    # The real subprocess path is covered by the other tests in this file.
+    monkeypatch.setattr(verify, "run", lambda check, cwd, timeout=0: (False, "1 failed"))
     replies = [_plan(), _write("calc/ops.py", BAD_OPS), _write("tests/test_ops.py", TEST)] + \
               [say(CLAIM)] * 8
 
