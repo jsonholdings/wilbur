@@ -190,6 +190,52 @@ def _is_transient(exc: Exception) -> bool:
     return False
 
 
+def tool_call_schema(tools: list[dict[str, Any]]) -> dict[str, Any]:
+    """JSON schema for Ollama's `format` field: the reply must be an object
+    with a `content` string and a `tool_calls` list whose names are limited to
+    the offered tools. Constraining the decode means a weak local model cannot
+    emit a malformed call; recover_tool_calls stays as the fallback for models
+    that ignore `format` (not yet measured on the abliterated 32b it was
+    written for, so it is not removed)."""
+    names = sorted({(t.get("function") or t).get("name", "") for t in tools} - {""})
+    return {
+        "type": "object",
+        "properties": {
+            "content": {"type": "string"},
+            "tool_calls": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "enum": names},
+                        "arguments": {"type": "object"},
+                    },
+                    "required": ["name", "arguments"],
+                },
+            },
+        },
+        "required": ["content", "tool_calls"],
+    }
+
+
+def parse_constrained_reply(content: str, known: set[str]) -> tuple[list[ToolCall], str] | None:
+    """Decode a reply produced under tool_call_schema. None when the content is
+    not that shape (the model ignored `format`), so the caller falls back."""
+    try:
+        obj = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(obj, dict) or not isinstance(obj.get("tool_calls"), list):
+        return None
+    calls: list[ToolCall] = []
+    for raw in obj["tool_calls"]:
+        call = _coerce_call(raw)
+        if call is not None and call.name in known:
+            calls.append(ToolCall(name=call.name, arguments=call.arguments))
+    text = obj.get("content", "")
+    return calls, text if isinstance(text, str) else ""
+
+
 class OllamaClient:
     def __init__(
         self,
@@ -207,6 +253,7 @@ class OllamaClient:
         self.max_retries = max_retries
         self.backoff_base = backoff_base
         self._sleep = sleep
+        self.constrained_tool_calls = False  # opt-in: Config.constrained_tool_calls
 
     def _post(self, request: urllib.request.Request) -> dict[str, Any]:
         """Send one request, retrying only transient failures with capped
@@ -241,6 +288,9 @@ class OllamaClient:
         }
         if tools:
             payload["tools"] = tools
+        constrained = bool(self.constrained_tool_calls and tools)
+        if constrained:
+            payload["format"] = tool_call_schema(tools or [])
 
         request = urllib.request.Request(
             f"{self.base_url}/api/chat",
@@ -263,6 +313,11 @@ class OllamaClient:
             calls.append(ToolCall(name=fn.get("name", ""), arguments=args,
                                   call_id=raw.get("id", "")))
 
+        if constrained and not calls:
+            names = known_tools or {(t.get("function") or t).get("name", "") for t in tools or []}
+            parsed = parse_constrained_reply(content, names)
+            if parsed is not None:
+                calls, content = parsed
         if not calls and known_tools:
             calls, content = recover_tool_calls(content, known_tools)
 

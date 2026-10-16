@@ -138,6 +138,13 @@ function fakeHttpModule() {
   };
 }
 
+/** spawnSync stub: `command -v wilbur` succeeds, `--sessions --json` lists none. */
+function fakeChildProcess() {
+  return {
+    spawnSync: () => ({ status: 0, stdout: "[]", stderr: "" }),
+  };
+}
+
 /** Load extension.js fresh against a fake vscode module. Returns { extension, fake }. */
 function loadExtensionWithFakeVscode() {
   const fake = makeFakeVscode();
@@ -148,6 +155,9 @@ function loadExtensionWithFakeVscode() {
     }
     if (request === "http") {
       return fakeHttpModule();
+    }
+    if (request === "child_process") {
+      return fakeChildProcess();
     }
     return originalLoad.call(this, request, ...rest);
   };
@@ -163,10 +173,10 @@ function loadExtensionWithFakeVscode() {
 }
 
 // Every isWilburAvailable() check in extension.js shells out via spawnSync to
-// `command -v wilbur`. In this sandbox that's harmless and deterministic
-// (either found or not), so we don't stub child_process -- we only assert on
-// vscode-visible side effects (terminals created, text sent), which is what
-// the bug was actually about.
+// `command -v wilbur`. Left real, that made these tests depend on the wilbur
+// CLI being on PATH: on CI and in the sandbox it is not, so every "open"
+// test saw zero terminals (6 failures since 0.4.3). Stub it so the CLI
+// reads as installed; the open-path behaviour is what is under test.
 
 /** activate() starts a 30s status-bar poll interval; every test must clear it or node --test hangs. */
 function activateAndTrack(t, extension) {

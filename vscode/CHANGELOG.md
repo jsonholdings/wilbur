@@ -1,6 +1,13 @@
 # Changelog
 
 
+## 0.4.4
+
+- Fix: the activation tests stub the `command -v wilbur` check, so they no
+  longer fail when the wilbur CLI is not installed (6 of 24 failed on CI
+  since 0.4.3). No change to the extension itself.
+
+
 ## 0.4.3
 
 - Change: `Wilbur: Open` now always opens a session. It previously reused a

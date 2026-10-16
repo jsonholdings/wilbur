@@ -174,6 +174,10 @@ class Task:
             raise
 
         if thread.is_alive():
+            # Signal the abandoned subagent to stop at its next checkpoint
+            # (between rounds / before each tool call) instead of looping on
+            # through max_turns in the background after control came back.
+            sub_cancel.set()
             agents_registry.finish(record.id, "timeout")
             return ToolResult(
                 f"Subagent '{label}' timed out after {timeout_s}s and was "

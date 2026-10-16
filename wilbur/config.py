@@ -69,6 +69,10 @@ class Config:
     # in the meantime, which reads as "never returns". This is the hard cap
     # actually enforced, independent of the model finishing a turn.
     subagent_timeout_s: int = 300
+    constrained_tool_calls: bool = False  # opt-in: Ollama `format` schema constrains tool calls
+    critic_pass: bool = False         # opt-in: one extra model call reviews each write
+    image_generation: bool = False    # opt-in generate_image tool (runs through gpu-queue)
+    image_model: str = "qwen-image-2512"  # or "qwen-image-2.1" (research-only licence)
     # A subagent's own tool-round budget, independent of the parent's
     # `max_turns`. Sharing the parent's (often much larger) budget let a
     # runaway subagent burn the wall-clock timeout above without ever

@@ -108,6 +108,9 @@ class Agent:
         # config selects the scripted client instead (wilbur.fake_backend).
         self.client = make_client(config, model or config.model, ollama_cls=OllamaClient)
         registry = build_registry(include_task=include_task)
+        if getattr(config, "image_generation", False):
+            from .tools.image import GenerateImage
+            registry["generate_image"] = GenerateImage()
         if tool_names is not None:
             registry = {k: v for k, v in registry.items() if k in tool_names}
         self.registry = registry
@@ -366,9 +369,18 @@ class Agent:
 
         # A successful write is the moment to check the project still builds.
         if call.name in WRITE_TOOLS:
+            output = result.output
+            if getattr(self.config, "critic_pass", False):
+                from .critic import review
+                note = review(self.client, self.config, call.name,
+                              call.arguments or {}, result.display or result.output)
+                if note:
+                    self.on_event("critic", {"name": call.name, "note": note})
+                    output += "\n\n" + note
             line = self._verify_after_write()
             if line:
-                return result.output + "\n\n[harness ran the project's own check]\n" + line
+                return output + "\n\n[harness ran the project's own check]\n" + line
+            return output
         return result.output
 
     @staticmethod

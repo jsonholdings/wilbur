@@ -3,6 +3,56 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.32.2
+
+`tests/test_image_tool.py` skips its two gpu-queue backend tests when the private `jh_gpu_queue_client` package is absent, so the public mirror's suite passes.
+
+
+## 2.32.1
+
+VS Code extension 0.4.4: its test suite passes without the wilbur CLI on PATH, so the public CI is green again. `scripts/publish.sh` runs the gate, pushes the source, syncs and pushes the public mirror and waits for its CI; `--check` reports drift.
+
+
+## 2.32.0
+
+`FEATURES.pdf` in the repo root, built from the code by `docs/build_feature_reference.py` through the shared JSON Holdings feature-reference generator: command-line flags, interactive commands, model tools, config switches, scripts, and what is built but unproven. Rebuild or check it with `tb python3 docs/build_feature_reference.py [--check]`.
+
+
+## 2.31.0
+
+Generated test matrix. `scripts/test_matrix.py` writes `TEST-MATRIX.md`, listing every tool and boolean config switch with the test files that exercise it (all on the fake backend); `--check`, run by the gate, fails when the file is stale or a row has no test. New tests cover the `verify_done_claims` and `progress_log` switches. `parallel_tools` is flagged as a switch no code reads.
+
+
+## 2.30.0
+
+Remote GPU host support. New README section "Use a GPU on another machine" (SSH tunnel, `--no-models --no-gpu` install, secret placement, the port-11434 clash). `contrib/remote-gpu/` adds a systemd `--user` tunnel unit and `wilbur-remote-check --check`, which reports tunnel, Ollama, gpu-queue and secret as OK, FAIL or UNKNOWN. When Ollama is reachable but no gpu-queue secret is usable, Wilbur warns once at startup that GPU work is bypassing gpu-queue; grant behaviour is unchanged.
+
+
+## 2.29.0
+
+Opt-in grammar-constrained tool calls. Set `"constrained_tool_calls": true` and each Ollama request that offers tools carries a `format` JSON schema (a `content` string plus `tool_calls` whose names are limited to the offered tools), so the model cannot emit a malformed call. A reply that ignores `format` falls back to the existing recovery path, which stays until it is measured on `huihui_ai/qwen2.5-coder-abliterate:32b`.
+
+
+## 2.28.0
+
+Opt-in `generate_image` tool. Off by default; set `"image_generation": true`. It submits an `image_generate` job to gpu-queue (never the GPU directly) and saves the returned PNG inside the project after approval. `image_model` defaults to `qwen-image-2512` (Apache-2.0); `qwen-image-2.1` is allowed and carries a research-only licence warning in the approval prompt and result. gpu-queue has no `image_generate` kind yet, so today the tool returns a clear "no kind registered" error; the job contract is in `wilbur/tools/image.py`.
+
+
+## 2.27.0
+
+Opt-in critic pass. Set `"critic_pass": true` in `~/.config/wilbur/config.json` and each successful `write_file`/`edit_file` gets one extra model call that reviews the change; a `PROBLEM:` verdict is appended to the tool result so the agent re-reads and fixes it. Off by default (about one extra call per write); a failed critic call never fails the write.
+
+
+## 2.26.1
+
+A timed-out subagent is now told to stop. The `task` tool sets the subagent's cancel event when its `subagent_timeout_s` expires, so the abandoned subagent exits at its next round or tool-call checkpoint instead of looping through `max_turns` in the background.
+
+
+## 2.26.0
+
+One-shot runs are saved. `wilbur -p` now writes a session (always a new id, never the directory's latest, so a script cannot inherit a stale plan), saved even when the run fails, so `--continue` resumes it.
+
+
 ## 2.25.12
 
 Fixed the last timing flake. `test_repeated_identical_done_claims_still_trip_the_stuck_detector`

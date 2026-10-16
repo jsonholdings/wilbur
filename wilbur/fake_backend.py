@@ -168,4 +168,7 @@ def make_client(config: Any, model: str, ollama_cls: Any = OllamaClient) -> Any:
     caller so tests that patch `wilbur.agent.OllamaClient` keep working."""
     if check_backend(config) == "fake":
         return shared_client(config.fake_script)
-    return ollama_cls(config.base_url, model, config.request_timeout)
+    client = ollama_cls(config.base_url, model, config.request_timeout)
+    if getattr(config, "constrained_tool_calls", False):
+        client.constrained_tool_calls = True
+    return client

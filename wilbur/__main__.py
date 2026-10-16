@@ -24,6 +24,17 @@ PULL_SUGGESTIONS = (
 )
 
 
+def _warn_gq_bypass() -> None:
+    """Ollama answered; say loudly, once, when GPU work would skip gpu-queue."""
+    try:
+        from . import gpu_priority
+    except ImportError:  # OSS build ships without gpu_priority
+        return
+    message = gpu_priority.bypass_warning()
+    if message:
+        print(ui.error(message), file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "loop":
@@ -167,6 +178,7 @@ def _ensure_model(config: Config) -> int | None:
             "    ollama serve        # or: systemctl --user start ollama\n"
             "Then run `wilbur` again."))
         return 1
+    _warn_gq_bypass()
 
     installed = {m.name: m for m in manager.list_models()}
     if config.model in installed and installed[config.model].supports_tools:
@@ -258,6 +270,11 @@ def _oneshot(config: Config, cwd: str, prompt: str, auto: bool) -> int:
         approve=lambda tool, detail: Approval.GRANTED if auto else Approval.DENIED,
         on_event=_print_event,
     )
+    # A one-shot always gets a NEW session id: inheriting the directory's latest
+    # session would let a script silently pick up a stale plan. Saved in
+    # `finally` so a failed or interrupted run is still resumable via --continue.
+    from . import session as sessions
+    session_id = sessions.new_id(cwd)
     try:
         reply = agent.run(prompt)
     except KeyboardInterrupt:
@@ -265,6 +282,8 @@ def _oneshot(config: Config, cwd: str, prompt: str, auto: bool) -> int:
     except Exception as exc:
         print(ui.error(f"{type(exc).__name__}: {exc}"), file=sys.stderr)
         return 1
+    finally:
+        sessions.save(session_id, cwd, agent.messages, agent.state, config.model)
     print(reply)
     return 0
 

@@ -171,6 +171,40 @@ def test_stuck_subagent_times_out_instead_of_hanging(ctx, release_stuck):
     assert "timed out" in res.output.lower()
 
 
+def test_timed_out_subagent_is_told_to_cancel(ctx, release_stuck):
+    """A timeout must not leave the subagent looping in the background:
+    its cancel event is set so it stops at its next checkpoint."""
+    seen = {}
+
+    class HangingSub(FakeSub):
+        def run(self, prompt):
+            seen["cancel"] = self.kw["cancel"]
+            release_stuck.wait(5)
+            return "too late"
+
+    import wilbur.agent as am
+    am.Agent = HangingSub
+    ctx.config.subagent_timeout_s = 0.2
+    res = run_task(ctx, prompt="work", agent_type="general")
+    assert res.is_error and "timed out" in res.output.lower()
+    assert seen["cancel"].is_set()
+
+
+def test_finished_subagent_is_not_cancelled(ctx):
+    seen = {}
+
+    class QuickSub(FakeSub):
+        def run(self, prompt):
+            seen["cancel"] = self.kw["cancel"]
+            return "ok"
+
+    import wilbur.agent as am
+    am.Agent = QuickSub
+    res = run_task(ctx, prompt="work", agent_type="general")
+    assert not res.is_error
+    assert not seen["cancel"].is_set()
+
+
 def test_subagent_exception_is_still_reported_not_swallowed(ctx):
     def build(**kw):
         s = FakeSub(**kw)
