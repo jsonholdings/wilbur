@@ -195,11 +195,13 @@ function getOrCreateTerminal() {
     wilburPath,
     useFlatpakSpawn,
     args: launchExtraArgs(),
+    env: { WILBUR_SURFACE: "vscode" },
   });
 
   wilburTerminal = vscode.window.createTerminal({
     name: TERMINAL_NAME,
     cwd,
+    env: { WILBUR_SURFACE: "vscode" },
     location: vscode.TerminalLocation
       ? vscode.TerminalLocation.Editor
       : undefined,
@@ -313,10 +315,12 @@ function launchWilburTerminal(name, extraArgs) {
     wilburPath,
     useFlatpakSpawn,
     args: [...extraArgs, ...launchExtraArgs()],
+    env: { WILBUR_SURFACE: "vscode" },
   });
   const terminal = vscode.window.createTerminal({
     name,
     cwd,
+    env: { WILBUR_SURFACE: "vscode" },
     location: vscode.TerminalLocation
       ? vscode.TerminalLocation.Editor
       : undefined,

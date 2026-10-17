@@ -3,6 +3,48 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.35.1
+- Publishing: `tests/test_jh_source.py` is no longer copied to the public mirror. It imports `voice/`, which the mirror does not carry, so the mirror's test run failed at collection and 2.33.2–2.35.0 never reached the public repo.
+
+## 2.35.0
+
+Bounded message check. A line typed while Wilbur works was read only when the whole
+turn ended (up to 60 tool rounds, each a model call of up to 10 min, plus `/loop`
+turns and long `sleep` commands), so a message could sit unread for hours. Now it is
+read within `message_check_max_s` (default 60) at every safe point: the agent injects
+plain lines into the conversation between tool rounds, a slash command ends the turn
+at once so the REPL runs it, `run_bash` cuts a `sleep`/wait command short when a message
+is pending, `/loop` hands back to the prompt between turns, and a watcher thread keeps
+run.json's `unread_message_since` current. `wilbur status --check` exits 1 and reports
+the age when a message is unread for more than twice the bound. A model call already in
+progress (up to `request_timeout`) or a build/test command still runs to its end first. End of input (piped stdin) is not a
+message and never pauses a turn. A line read mid-turn still stops keep-going, like a
+line left queued.
+
+
+## 2.34.0
+
+Outside readers can see elapsed time, tokens and subagents. `run.json` now carries `started_at` (the run's first state write) and `usage` (cumulative `prompt_tokens`, `completion_tokens`, `total_tokens`, model `calls` and `seconds`), refreshed after every model call without resetting `since`. The subagent registry is mirrored to `<session>.subagents.json` (id, label, kind, state, started, ended, round, current, last_tool), written atomically on every transition and removed with `run.json` on a clean exit; `wilbur status --json` includes each run's `subagents`. The dead `parallel_tools` config switch is removed (no code read it; an old config file that still sets it is ignored). `run.json` also records `surface` (`cli` or `vscode`; VS Code extension 0.4.5 sets `WILBUR_SURFACE=vscode` on its terminals) so the Agents board can label Wilbur CLI vs Wilbur VS Code.
+
+
+## 2.33.2
+
+The voice transcribe asset now resolves from `$JH_SOURCE_DIR`, else the clean origin
+mirror (`jsonholdings-origin-mirror`), instead of the shared JSON Holdings checkout,
+which lags origin and holds other sessions' edits. `$WILBUR_TRANSCRIBE_ASSET` still
+overrides it. `scripts/voice_bench.py` exits 2 (UNKNOWN) when the asset is missing.
+
+
+## 2.33.1
+
+The idle-exit wait has its own method (`Repl._next_line_within`), and its tests wait for the stop instead of a fixed 3 s, so they pass on the slower public-mirror gate.
+
+
+## 2.33.0
+
+A stopped run can no longer look alive. Each run writes `<session>.run.json` atomically on every state change (working, waiting for approval, waiting for input, stopped with a reason) and removes it on a clean exit; a file whose process is gone reads as `dead`. A stop rings the bell once, prints a `STOPPED — <reason>` banner and sets the terminal title (config `stop_bell`, `set_title`). New `wilbur status [--check] [--json]` reads those files with no model: `--check` exits 1 for a hung or dead run and 2 when it cannot look. Two empty model replies in a row now stop keep-going with reason `empty_reply` instead of nudging on. Optional `idle_exit_minutes` saves and exits a stopped run that had a stated horizon.
+
+
 ## 2.32.2
 
 `tests/test_image_tool.py` skips its two gpu-queue backend tests when the private `jh_gpu_queue_client` package is absent, so the public mirror's suite passes.

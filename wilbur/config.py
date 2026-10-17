@@ -61,7 +61,11 @@ class Config:
 
     # --- agent loop ---
     max_turns: int = 60               # tool-call rounds per user message
-    parallel_tools: bool = False      # local models are unreliable at this
+    # Bounded message check (wilbur.inbox): a line typed while a turn runs
+    # is read within this many seconds -- between tool rounds or
+    # pre-empting a sleep/wait command -- and `wilbur status
+    # --check` fails on one left unread past 2x this.
+    message_check_max_s: float = 60.0
     request_timeout: int = 600
     # A `task` subagent runs synchronously inside one of the parent's tool
     # calls, so nothing else bounds its wall time: max_turns * request_timeout
@@ -133,6 +137,19 @@ class Config:
     team_max_revisions: int = 2       # denial loops before asking the user
     team_role_timeout_s: int = 0      # 0 -> falls back to subagent_timeout_s
     team_reviewer_min_free_mb: int = 8192
+
+    # --- stopped-state visibility (wilbur.runstate) ---
+    # Bell (\a) and terminal title (OSC 0) on entering `stopped`.
+    # Default on; off when stdout is not a tty (checked at call time).
+    stop_bell: bool = True
+    set_title: bool = True
+    # `wilbur status --check`: a `working` run with no progress in this many
+    # minutes is considered hung (exit 1). 0 = no hung detection.
+    status_hung_minutes: int = 30
+    # Optional idle exit: after a horizon-stop, if no input arrives within
+    # this many minutes, save the session and exit. 0 = off (default).
+    # Interactive sessions without a horizon are never auto-exited.
+    idle_exit_minutes: int = 0
 
     # --- voice ---
     # "wilbur" for the Appalachian voice from the v1 SOUL.md, "none" for plain

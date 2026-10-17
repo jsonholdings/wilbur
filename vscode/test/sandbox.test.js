@@ -138,3 +138,13 @@ test("shellQuote: wraps and escapes single quotes", () => {
   assert.equal(shellQuote("it's fine"), "'it'\\''s fine'");
   assert.equal(shellQuote("/plain/path"), "'/plain/path'");
 });
+
+test("buildLaunchArgv: env is forwarded with --env only through flatpak-spawn", () => {
+  const env = { WILBUR_SURFACE: "vscode" };
+  assert.deepEqual(
+    buildLaunchArgv({ wilburPath: "wilbur", useFlatpakSpawn: "on", env }),
+    ["flatpak-spawn", "--host", "--env=WILBUR_SURFACE=vscode", "wilbur"]);
+  assert.deepEqual(
+    buildLaunchArgv({ wilburPath: "wilbur", useFlatpakSpawn: "off", env }),
+    ["wilbur"]);
+});

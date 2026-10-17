@@ -1,6 +1,13 @@
 # Changelog
 
 
+## 0.4.5
+
+- Change: terminals the extension opens set `WILBUR_SURFACE=vscode` (passed as
+  `--env=` through `flatpak-spawn --host`), so `run.json` records which surface
+  started the run.
+
+
 ## 0.4.4
 
 - Fix: the activation tests stub the `command -v wilbur` check, so they no

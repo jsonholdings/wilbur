@@ -69,6 +69,9 @@ class ToolContext:
     # threading.Event set to request cooperative cancellation (Ctrl-C reaching
     # a subagent running on its own thread). Optional for the same reason.
     cancel: Any = None
+    # wilbur.inbox.Inbox: lets a long tool call notice a pending user
+    # message (a sleep/wait is pre-empted). Optional for the same reason.
+    inbox: Any = None
 
 
 def clamp(text: str, max_chars: int, max_lines: int) -> str:

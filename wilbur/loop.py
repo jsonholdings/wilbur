@@ -54,7 +54,7 @@ Take the next concrete step with your tools. End with "{marker}" only once it is
 
 @dataclass
 class LoopResult:
-    status: str  # done | unverified | turn_cap | time_cap | stalled | cancelled | error
+    status: str  # done | unverified | turn_cap | time_cap | stalled | cancelled | user_message | error
     turns: int = 0
     seconds: float = 0.0
     final: str = ""
@@ -107,6 +107,7 @@ def run_goal_loop(
     check: Callable[[], tuple[bool | None, str]] | None = None,
     cancel: threading.Event | None = None,
     clock: Callable[[], float] = time.monotonic,
+    interrupt: Callable[[], bool] | None = None,
     on_turn: Callable[[int, str], None] | None = None,
 ) -> LoopResult:
     """Drive `agent` turn after turn until the done-check passes or a cap stops it.
@@ -125,6 +126,10 @@ def run_goal_loop(
             return LoopResult("cancelled", turn - 1, clock() - started, reply, check_line)
         if clock() - started >= max_seconds:
             return LoopResult("time_cap", turn - 1, clock() - started, reply, check_line)
+        if turn > 1 and interrupt is not None and interrupt():
+            # A slash command the agent could not take in-turn is waiting:
+            # hand control back to the REPL now (bounded message check).
+            return LoopResult("user_message", turn - 1, clock() - started, reply, check_line)
         prompt = (f"{goal}\n\n(Loop mode: keep going until done; end with "
                   f"\"{GOAL_COMPLETE}\" once verified.)" if turn == 1 else
                   CONTINUE_PROMPT.format(turn=turn, why=why, goal=goal, marker=GOAL_COMPLETE))

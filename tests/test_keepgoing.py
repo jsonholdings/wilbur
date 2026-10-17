@@ -173,8 +173,10 @@ def test_a_typed_line_wins_over_the_nudge(monkeypatch, tmp_path, capsys):
     replies = [_plan(0), say("Next, I'll create a.txt."), say("ok, stopped.")]
     repl, client = _run(monkeypatch, tmp_path, replies, lines=(PROMPT, "stop there"))
     assert "continuing" not in capsys.readouterr().out
-    assert client.seen[-1][-1]["content"] == "stop there" or any(
-        m.get("content") == "stop there" for m in client.seen[-1])
+    # 2.35.0: the line is read mid-turn (wilbur.inbox, with a "new message"
+    # header) and still stops keep-going instead of a nudge.
+    assert any("stop there" in (m.get("content") or "") for m in client.seen[-1])
+    assert repl._stop_reason == "user_interrupt"
 
 
 def test_repeated_no_progress_trips_the_stuck_detector(monkeypatch, tmp_path, capsys):
@@ -246,11 +248,16 @@ def test_quiet_after_tool_work_continues(monkeypatch, tmp_path, capsys):
     assert "Both files are written." in capsys.readouterr().out
 
 
-def test_quiet_again_after_a_nudge_is_a_stall(monkeypatch, tmp_path, capsys):
+def test_two_empty_replies_stop_with_empty_reply(monkeypatch, tmp_path, capsys):
+    # The agent's one empty-reply retry also came back empty: keep-going stops
+    # and names the cause (stopped-state-is-visible spec item 3, 2026-10-16),
+    # instead of nudging on and later stopping under an unrelated reason.
     replies = [_write("a.txt"), say(""), say(""), _write("b.txt")]
-    _run(monkeypatch, tmp_path, replies, lines=("create a.txt and b.txt",))
+    repl, _ = _run(monkeypatch, tmp_path, replies, lines=("create a.txt and b.txt",))
     out = capsys.readouterr().out
-    assert "continuing (1)" in out and "continuing (2)" not in out
+    assert "continuing" not in out and not (tmp_path / "b.txt").exists()
+    assert "two empty replies" in out and "STOPPED \u2014 empty_reply" in out
+    assert repl._stop_reason == "empty_reply"
 
 
 def test_asking_leave_to_carry_on_continues(monkeypatch, tmp_path, capsys):

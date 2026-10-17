@@ -4,9 +4,12 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import signal
 import subprocess
+import time
 from typing import Any
 
+from ..inbox import DEFAULT_BOUND_S, is_wait_command, poll_interval
 from .base import Approval, ToolContext, ToolResult, clamp, denial_message
 
 
@@ -102,6 +105,9 @@ class Bash:
             return ToolResult(denial_message("command", outcome), is_error=True)
 
         timeout = int(args.get("timeout", 120))
+        inbox = getattr(ctx, "inbox", None)
+        if inbox is not None and is_wait_command(command):
+            return self._run_wait(command, ctx, timeout, inbox)
         try:
             proc = subprocess.run(
                 command, shell=True, cwd=ctx.cwd, capture_output=True,
@@ -117,3 +123,56 @@ class Bash:
             return ToolResult(f"exit {proc.returncode}\n{body}" if body
                               else f"exit {proc.returncode} (no output)", is_error=True)
         return ToolResult(body or "(no output)")
+
+    @staticmethod
+    def _run_wait(command: str, ctx: ToolContext, timeout: int, inbox) -> ToolResult:
+        """A sleep/wait command, polled so a pending user message (or
+        Ctrl-C) pre-empts it instead of holding the message for the whole
+        wait (bounded message check, wilbur.inbox)."""
+        step = poll_interval(getattr(ctx.config, "message_check_max_s", DEFAULT_BOUND_S))
+        proc = subprocess.Popen(command, shell=True, cwd=ctx.cwd, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                errors="replace", start_new_session=True)
+        deadline = time.monotonic() + timeout
+        why = ""
+        while True:
+            try:
+                out, _ = proc.communicate(timeout=step)
+                break
+            except BaseException as exc:
+                if not isinstance(exc, subprocess.TimeoutExpired):
+                    # Ctrl-C: the wait runs in its own session, so SIGINT
+                    # never reached it -- stop it here, not leave an orphan.
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                    except OSError:
+                        pass
+                    raise
+                cancel = getattr(ctx, "cancel", None)
+                if inbox.pending():
+                    why = "Wait interrupted: a new message from the user arrived."
+                elif cancel is not None and cancel.is_set():
+                    why = "Wait interrupted: cancelled."
+                elif time.monotonic() >= deadline:
+                    why = f"Command timed out after {timeout}s."
+                if why:
+                    _stop_group(proc)
+                    return ToolResult(why, is_error=not why.startswith("Wait interrupted"))
+        body = (out or "").strip() or "(no output)"
+        if proc.returncode != 0:
+            return ToolResult(f"exit {proc.returncode}\n{body}", is_error=True)
+        return ToolResult(body)
+
+
+def _stop_group(proc: subprocess.Popen) -> None:
+    """SIGTERM the wait's process group, SIGKILL it if it ignores that."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except OSError:
+            proc.kill()
+        try:
+            proc.communicate(timeout=2)
+            return
+        except subprocess.TimeoutExpired:
+            continue

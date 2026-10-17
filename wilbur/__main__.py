@@ -40,6 +40,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "loop":
         from .loop import loop_main
         return loop_main(argv[1:])
+    if argv and argv[0] == "status":
+        from .status import status_main
+        return status_main(argv[1:])
     parser = argparse.ArgumentParser(
         prog="wilbur", description="Local coding agent for the terminal.")
     parser.add_argument("prompt", nargs="*", help="run this prompt and exit")

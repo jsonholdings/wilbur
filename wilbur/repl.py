@@ -1,6 +1,7 @@
 """Interactive session: slash commands, permission prompts, event rendering."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import queue
@@ -20,7 +21,9 @@ except ImportError:  # pragma: no cover -- non-POSIX platform
 
 from . import team as team_mod
 from . import ui
+from . import runstate
 from .agent import Agent
+from .inbox import Inbox, poll_interval
 from .config import Config, HISTORY_PATH
 from . import persona as persona_mod
 from . import registry
@@ -102,6 +105,13 @@ class Repl:
         # Nothing else reads stdin directly; input()'s own blocking read
         # would otherwise race the pump thread for the same file descriptor.
         self._input_q: "queue.Queue[str | None]" = queue.Queue()
+        # Bounded message check: the agent reads this queue between tool
+        # rounds and run_bash pre-empts a sleep for it (wilbur.inbox).
+        self.inbox = Inbox(self._input_q)
+        self._inbox_thread: threading.Thread | None = None
+        self._unread_written: float | None = None
+        # The watcher thread and the main thread both write run.json.
+        self._runstate_lock = threading.RLock()
         self._approval_q: "queue.Queue[str | None]" = queue.Queue()
         self._turn_active = threading.Event()
         self._turn_hit_limit = False
@@ -131,6 +141,15 @@ class Repl:
         self.sessions = _sessions
         self.state = restore["state"] if restore else RunState()
         self.session_id = restore["id"] if restore else _sessions.new_id(cwd)
+        # Authoritative run state (wilbur.runstate): written on every
+        # transition so `wilbur status` reads the truth instead of guessing.
+        self._run_state = runstate.WAITING_INPUT
+        self._rounds = 0
+        self._last_progress = time.time()
+        self._stop_reason: str | None = None
+        self._stopped_since: float | None = None
+        self._run_started_at: float | None = None   # first run.json write
+        self._run_state_since: float = time.time()  # when _run_state began
         self.agent = self._new_agent()
         if restore:
             # Restore the transcript under the freshly built system prompt: the
@@ -147,13 +166,49 @@ class Repl:
     # ---------------------------------------------------------------- #
 
     def _new_agent(self) -> Agent:
-        return Agent(
+        agent = Agent(
             self.config, self.cwd,
             approve=self._approve,
             on_event=self._on_event,
             system_extra=self._system_extra(),
             state=self.state,
         )
+        agent.inbox = self.inbox
+        agent.ctx.inbox = self.inbox
+        return agent
+
+    def _start_inbox_watch(self) -> None:
+        """Background poll: within the bound, acknowledge a line queued
+        mid-turn and keep run.json's `unread_message_since` current, even
+        while a long model call or tool call blocks the main thread."""
+        if self._inbox_thread is not None:
+            return
+        bound = float(getattr(self.config, "message_check_max_s", 60.0))
+        interval = poll_interval(bound)
+
+        def watch() -> None:
+            while not self._inbox_stop.wait(interval):
+                self._sync_unread()
+
+        self._inbox_stop = threading.Event()
+        self._inbox_thread = threading.Thread(target=watch, daemon=True,
+                                              name="wilbur-inbox-watch")
+        self._inbox_thread.start()
+
+    def _stop_inbox_watch(self) -> None:
+        if self._inbox_thread is not None:
+            self._inbox_stop.set()
+            self._inbox_thread.join(2)
+            self._inbox_thread = None
+
+    def _sync_unread(self) -> None:
+        since = self.inbox.unread_since()
+        if since == self._unread_written:
+            return
+        if getattr(self, "_run_state", None) == runstate.WORKING:
+            self._set_runstate(runstate.WORKING, title=False)
+        else:
+            self._unread_written = since
 
     def _system_extra(self) -> str:
         """Persona first, then the project's own instructions.
@@ -303,13 +358,27 @@ class Repl:
             return
         self._input_q.put(line)
         if self._turn_active.is_set():
-            print(ui.notice(
-                f"queued ({self._input_q.qsize()}) -- runs after this turn"))
+            if getattr(self, "inbox", None) is not None:
+                self.inbox.note_arrival()
+            bound = int(float(getattr(self.config, "message_check_max_s", 60.0)))
+            what = ("runs after this turn" if line.startswith("/")
+                    else f"Wilbur reads it at the next step (within ~{bound}s)")
+            print(ui.notice(f"queued ({self._input_q.qsize()}) -- {what}"))
+
+    def _next_line_within(self, seconds: float) -> str | None:
+        """Like _next_line, but raises queue.Empty after `seconds` (idle exit)."""
+        line = self._input_q.get(timeout=seconds)
+        if getattr(self, "inbox", None) is not None:
+            self.inbox.mark_read()
+        return line
 
     def _next_line(self) -> str | None:
         """Block for the next command: an already-queued one first, then
         whatever the pump reads next. None means stdin closed."""
-        return self._input_q.get()
+        line = self._input_q.get()
+        if getattr(self, "inbox", None) is not None:
+            self.inbox.mark_read()
+        return line
 
     # ---------------------------------------------------------------- #
     # prompt_toolkit pump: a pinned prompt + bottom toolbar instead of the
@@ -471,6 +540,9 @@ class Repl:
         # `finally` no matter how this returns, so a later queued line goes
         # back to being a command again.
         self._awaiting_approval.set()
+        _mark = getattr(self, "_set_runstate", None)  # absent on test doubles
+        if _mark:
+            _mark(runstate.WAITING_APPROVAL)
         try:
             print()
             print(ui.c(f"  {tool}", ui.BOLD) + ui.c(f"  {detail}", ui.GREY))
@@ -507,6 +579,8 @@ class Repl:
             return Approval.DENIED
         finally:
             self._awaiting_approval.clear()
+            if _mark:
+                _mark(runstate.WORKING)
             if spinner is not None:
                 spinner.resume()
 
@@ -516,6 +590,10 @@ class Repl:
             self.stats["in_tokens"] += data.get("prompt_tokens", 0)
             self.stats["out_tokens"] += data.get("tokens", 0)
             self.stats["seconds"] += data.get("seconds", 0.0)
+            if getattr(self, "_run_started_at", None) is not None:
+                # Same state, fresh token counts: `since` is kept, so the
+                # board's tokens move while a long working stretch runs.
+                self._write_runstate()
         elif kind == "tool_start":
             self._turn_tool_calls = getattr(self, "_turn_tool_calls", 0) + 1
             args = data["args"]
@@ -533,10 +611,16 @@ class Repl:
                 f"{data['after_tokens']:,} tokens"))
         elif kind == "team_reviewer_model":
             print(ui.notice(data.get("note", "")))
+        elif kind == "message_injected":
+            n = len(data.get("lines", []))
+            print(ui.notice(f"read {n} new message(s) -- handling now"))
         elif kind == "limit":
             self._turn_hit_limit = True
             print(ui.error(f"hit the {data['turns']}-round limit"))
         if kind == "message":
+            self._last_progress = time.time()
+            if getattr(self, "_run_state", None) == runstate.WORKING:
+                self._set_runstate(runstate.WORKING)
             # Persist after every transcript append, not only at turn end --
             # a hang or a crash mid-turn must still leave a resumable log.
             self.sessions.save(self.session_id, self.cwd, self.agent.messages,
@@ -544,7 +628,97 @@ class Repl:
 
     # ---------------------------------------------------------------- #
 
+    # ---------------------------------------------------------------- #
+    # run state (wilbur.runstate)
+
+    def _tty(self) -> bool:
+        try:
+            return sys.stdout.isatty()
+        except Exception:
+            return False
+
+    def _set_runstate(self, state: str, reason: str | None = None,
+                      title: bool = True) -> None:
+        # The inbox watcher thread and the main thread both write run.json.
+        with self._runstate_guard():
+            now = time.time()
+            if getattr(self, "_run_started_at", None) is None:
+                self._run_started_at = now
+            # `since` marks entering this state: a repeat write of the same state
+            # and reason (e.g. WORKING at each turn start) keeps it.
+            unchanged = (getattr(self, "_run_state", None) == state
+                         and getattr(self, "_run_reason", None) == reason
+                         and getattr(self, "_run_state_since", None) is not None)
+            self._run_state = state
+            if not unchanged:
+                self._run_state_since = now
+            self._run_reason = reason
+            self._write_runstate()
+            if (title and state == runstate.WORKING and getattr(self.config, "set_title", True)
+                    and self._tty()):
+                sys.stdout.write(runstate.working_title(self._rounds))
+                sys.stdout.flush()
+
+    def _runstate_guard(self):
+        lock = getattr(self, "_runstate_lock", None)   # absent on test doubles
+        return lock if lock is not None else contextlib.nullcontext()
+
+    def _write_runstate(self) -> None:
+        with self._runstate_guard():
+            box = getattr(self, "inbox", None)
+            unread = box.unread_since() if box is not None else None
+            self._unread_written = unread
+            runstate.write(self.session_id, state=self._run_state,
+                           reason=getattr(self, "_run_reason", None),
+                           cwd=str(self.cwd), model=self.config.model,
+                           rounds=self._rounds, last_progress_at=self._last_progress,
+                           started_at=getattr(self, "_run_started_at", None),
+                           since=getattr(self, "_run_state_since", None),
+                           usage=runstate.usage_from_stats(self.stats),
+                           unread_message_since=unread)
+
+    def _persist_subagents(self, rows: list) -> None:
+        runstate.write_subagents(self.session_id, rows)
+
+    def _enter_stopped(self, reason: str) -> None:
+        """Stop is loud: bell + banner + title (tty only), and run.json says
+        `stopped` with the reason, so a stopped run cannot look alive."""
+        if reason not in runstate.STOP_REASONS:
+            reason = runstate.ERROR
+        self._stop_reason = reason
+        self._stopped_since = time.time()
+        self._set_runstate(runstate.STOPPED, reason)
+        print(ui.notice(runstate.stop_banner(reason, self._stopped_since)))
+        if self._tty():
+            if getattr(self.config, "stop_bell", True):
+                sys.stdout.write("\a")
+            if getattr(self.config, "set_title", True):
+                sys.stdout.write(runstate.stopped_title(reason, self._stopped_since))
+            sys.stdout.flush()
+
+    def _idle_exit_due(self) -> float | None:
+        """Seconds to wait for input before an idle exit, or None (off).
+        Only after a run that had a stated horizon has stopped: interactive
+        sessions without a horizon are never auto-exited."""
+        minutes = float(getattr(self.config, "idle_exit_minutes", 0) or 0)
+        if minutes <= 0 or self._stopped_since is None:
+            return None
+        if not getattr(self._horizon, "phrase", None):
+            return None
+        return 60 * minutes
+
     def run(self) -> int:
+        from .tools import agents_registry
+        agents_registry.bind_persist(self._persist_subagents)
+        try:
+            self._start_inbox_watch()
+            return self._run_loop()
+        finally:
+            agents_registry.bind_persist(None)
+            self._stop_inbox_watch()
+            runstate.remove(self.session_id)  # clean exit: no stale run.json
+
+    def _run_loop(self) -> int:
         fake = getattr(self.config, "backend", "ollama") == "fake"
         if not fake and not self.manager.available():
             print(ui.error(f"No Ollama at {self.config.base_url}."))
@@ -559,11 +733,25 @@ class Repl:
         else:
             self._start_pump()
 
+        self._set_runstate(runstate.WAITING_INPUT)
         while True:
             if not self._use_ptk:
                 print(ui.prompt(), end="", flush=True)
             try:
-                line = self._next_line()
+                idle_wait = self._idle_exit_due()
+                if idle_wait is None:
+                    line = self._next_line()
+                else:
+                    try:
+                        line = self._next_line_within(idle_wait)
+                    except queue.Empty:
+                        self.sessions.save(self.session_id, self.cwd, self.agent.messages,
+                                           self.state, self.config.model)
+                        print()
+                        print(ui.notice(f"idle exit: stopped ({self._stop_reason}) and no "
+                                         f"input for {self.config.idle_exit_minutes} min "
+                                         "-- session saved"))
+                        return runstate.IDLE_EXIT_CODES.get(self._stop_reason or "", 3)
             except KeyboardInterrupt:
                 print()
                 return 0
@@ -604,15 +792,22 @@ class Repl:
             self._turn_refused = False
             self._turn_tool_calls = 0
             self._begin_horizon(line)
+            self._stop_reason = None
+            self._stopped_since = None
+            self._rounds = 1
+            self._last_progress = time.time()
+            self._set_runstate(runstate.WORKING)
             try:
                 with spinner:
                     reply = self.agent.run(line)
                     reply = self._keep_going(reply)
             except KeyboardInterrupt:
                 print(ui.notice("interrupted -- queued commands are kept"))
+                self._enter_stopped(runstate.USER_INTERRUPT)
                 continue
             except Exception as exc:
                 print(ui.error(f"{type(exc).__name__}: {exc}"))
+                self._enter_stopped(runstate.ERROR)
                 continue
             finally:
                 self._turn_active.clear()
@@ -627,6 +822,7 @@ class Repl:
                 print()
                 print(ui.assistant(reply))
             print()
+            self._enter_stopped(self._stop_reason or runstate.DONE)
             if self._is_idle():
                 print(ui.signoff(self.config.idle_signoff_text))
                 print()
@@ -659,8 +855,14 @@ class Repl:
         when set > 0. Never touches approvals.
         """
         from . import keepgoing, progress
+        def stop(reason: str, text: str) -> str:
+            self._stop_reason = reason
+            return text
+
         if not getattr(self.config, "auto_continue", True):
-            return reply
+            if getattr(self.agent, "last_reply_empty", False):
+                return stop(runstate.EMPTY_REPLY, reply)
+            return stop(runstate.DONE, reply)
         cap = max(0, int(self.config.auto_continue_max))              # 0 = off
         minute_cap = max(0.0, float(self.config.auto_continue_max_minutes))
         start = clock()
@@ -670,10 +872,21 @@ class Repl:
                                f"horizon: {self._describe_horizon()}")
         n = 0
         while True:
-            if self._turn_refused or self.agent.cancel_event.is_set():
-                return reply
-            if any(q is not None for q in list(self._input_q.queue)):
-                return reply  # the user typed something: theirs runs next
+            if self._turn_refused:
+                return stop(runstate.REFUSED, reply)
+            if self.agent.cancel_event.is_set():
+                return stop(runstate.USER_INTERRUPT, reply)
+            if (any(q is not None for q in list(self._input_q.queue))
+                    or getattr(self.agent, "turn_messages_injected", 0)):
+                # the user typed something (still queued, or read mid-turn):
+                # theirs wins over the nudge
+                return stop(runstate.USER_INTERRUPT, reply)
+            if getattr(self.agent, "last_reply_empty", False):
+                # The agent's one empty-reply retry also came back empty:
+                # name the real cause, not whatever check would fire next.
+                print(ui.notice("keep going: two empty replies in a row -- stopping"))
+                self._log_progress("stopped", "empty_reply: two empty replies")
+                return stop(runstate.EMPTY_REPLY, reply)
 
             if self._turn_hit_limit:
                 # The round cap: checkpoint + carry on, not a stop.
@@ -685,7 +898,7 @@ class Repl:
             else:
                 gate = self._done_claim_gate(reply)
                 if gate is not None and gate[0] == "complete":
-                    return gate[1]
+                    return stop(runstate.DONE, gate[1])
                 if gate is not None:
                     reason, nudge = "not verified done", gate[1]
                 else:
@@ -694,21 +907,21 @@ class Repl:
                     if not decision.go:
                         if self.config.progress_log and n:
                             self._log_progress("stopped", decision.reason)
-                        return reply
+                        return stop(runstate.reason_from_decision(decision.reason), reply)
                     reason, nudge = decision.reason, keepgoing.NUDGE
                 if cap and n >= cap:
                     print(ui.notice(f"keep going: cap reached ({n}/{cap}) -- "
                                      "type continue to carry on"))
-                    return reply
+                    return stop(runstate.COUNT_CAP, reply)
                 if minute_cap and (clock() - start) >= 60 * minute_cap:
                     print(ui.notice("keep going: time cap reached -- type continue "
                                      "to carry on"))
-                    return reply
+                    return stop(runstate.TIME_CAP, reply)
                 if clock() >= horizon_deadline:
                     print(ui.notice(f"horizon reached ({self._describe_horizon()}) "
                                      "-- stopping; type continue to carry on"))
                     self._log_progress("stopped", "horizon reached")
-                    return reply
+                    return stop(runstate.HORIZON, reply)
                 if reply.strip():
                     print()
                     print(ui.assistant(reply))
@@ -716,6 +929,9 @@ class Repl:
                 print(ui.notice(f"\u21bb continuing {tag} -- {reason}"))
 
             n += 1
+            self._rounds = n + 1
+            self._last_progress = time.time()
+            self._set_runstate(runstate.WORKING)
             self._turn_tool_calls = 0
             reply = self.agent.run(nudge)
             self.sessions.save(self.session_id, self.cwd, self.agent.messages,
@@ -734,7 +950,7 @@ class Repl:
                                  f"{self._stuck.limit} turns -- stopping. "
                                  f"{self._stuck.report()}"))
                 self._log_progress("stopped (stuck)", self._stuck.report())
-                return reply
+                return stop(runstate.STUCK, reply)
 
     def _done_claim_gate(self, reply: str) -> tuple[str, str] | None:
         """Never accept "done" without evidence (wilbur.doneclaim).
@@ -1057,7 +1273,8 @@ class Repl:
             result = loop_mod.run_goal_loop(
                 self.agent, goal, max_turns=self.config.loop_max_turns,
                 max_seconds=self.config.loop_max_minutes * 60,
-                check=loop_mod.project_check(self.cwd), on_turn=on_turn)
+                check=loop_mod.project_check(self.cwd), on_turn=on_turn,
+                interrupt=getattr(self, "inbox", None) and self.inbox.pending)
         except KeyboardInterrupt:
             self.agent.cancel_event.clear()
             print(ui.notice("loop stopped (Ctrl-C) -- the conversation is kept"))

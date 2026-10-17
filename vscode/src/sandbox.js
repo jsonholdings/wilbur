@@ -27,16 +27,20 @@ function isFlatpakSandbox(existsFn) {
  * @param {"auto"|"on"|"off"} opts.useFlatpakSpawn setting value
  * @param {string[]} [opts.args] extra args to pass to wilbur
  * @param {() => boolean} [opts.detectSandbox] override for testing
+ * @param {Object<string,string>} [opts.env] variables wilbur itself must see;
+ *   `flatpak-spawn --host` does not forward the terminal's env, so they are
+ *   passed as `--env=K=V` on that path (the terminal env covers the other)
  * @returns {string[]}
  */
 function buildLaunchArgv(opts) {
-  const { wilburPath, useFlatpakSpawn, args = [], detectSandbox } = opts;
+  const { wilburPath, useFlatpakSpawn, args = [], detectSandbox, env = {} } = opts;
   const needsSpawn =
     useFlatpakSpawn === "on" ||
     (useFlatpakSpawn === "auto" && isFlatpakSandbox(detectSandbox));
 
   if (needsSpawn) {
-    return ["flatpak-spawn", "--host", wilburPath, ...args];
+    const envArgs = Object.entries(env).map(([k, v]) => `--env=${k}=${v}`);
+    return ["flatpak-spawn", "--host", ...envArgs, wilburPath, ...args];
   }
   return [wilburPath, ...args];
 }

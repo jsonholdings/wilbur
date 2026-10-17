@@ -102,6 +102,7 @@ class Agent:
         # before each tool call is what actually stops it -- setting it is
         # the caller's job (Task.run's KeyboardInterrupt handler).
         self.cancel_event = cancel if cancel is not None else threading.Event()
+        self.last_reply_empty = False
         self.turn_test_runs = 0
         # OllamaClient is looked up here, at call time, so a test that patches
         # wilbur.agent.OllamaClient still takes effect; `backend: fake` in the
@@ -120,6 +121,9 @@ class Agent:
         self.ctx = ToolContext(cwd=cwd, config=config, read_files={}, approve=approve)
         self.ctx.state = self.state
         self.ctx.cancel = self.cancel_event
+        # wilbur.inbox.Inbox (set by the REPL): a message typed mid-turn is
+        # read between rounds instead of only when the whole turn ends.
+        self.inbox = None
         system = SYSTEM_PROMPT + (f"\n\n{system_extra}" if system_extra else "")
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
 
@@ -133,14 +137,25 @@ class Agent:
         self.messages.append({"role": "user", "content": user_input})
         final = ""
         empty_retries = 0
+        # True when the one empty-reply retry ALSO came back empty: keep-going
+        # stops with reason `empty_reply` instead of whatever check fires next
+        # (2026-10-16: a run stopped after two empty replies and the log said
+        # "horizon reached", hiding the real cause).
+        self.last_reply_empty = False
         # Test commands run in this call (the model's or the harness's own):
         # the claims guard (wilbur.doneclaim) reads it.
         self.turn_test_runs = 0
+        # Lines the user typed that were read mid-turn (wilbur.inbox): keep-going
+        # treats them like a line still queued, so they win over the nudge.
+        self.turn_messages_injected = 0
 
         for turn in range(self.config.max_turns):
             if self.cancel_event.is_set():
                 final = "Cancelled by user."
                 self.on_event("cancelled", {})
+                break
+            if turn and self._check_messages():
+                final = "Paused: a command is waiting."
                 break
             self._maybe_compact()
             self._refresh_briefing()
@@ -188,6 +203,8 @@ class Agent:
                                     "reply with an empty message."),
                     })
                     continue
+                if not (reply.content or "").strip() and empty_retries >= 1:
+                    self.last_reply_empty = True
                 final = reply.content or (reply.thinking or "").strip()
                 break
 
@@ -200,6 +217,9 @@ class Agent:
                 result = self._execute(call)
                 self.messages.append(self._tool_message(call, result))
                 self.on_event("message", {})
+            # Remaining calls of this round still run (a skipped call would
+            # leave the transcript with a tool call and no result); the
+            # message is injected right after this round instead.
             if cancelled_mid_round:
                 final = "Cancelled by user."
                 self.on_event("cancelled", {})
@@ -211,6 +231,25 @@ class Agent:
         return final
 
     # ------------------------------------------------------------------ #
+
+    def _check_messages(self) -> bool:
+        """Read a message typed mid-turn at this safe point (between tool
+        rounds). Plain lines go into the conversation now; True means a
+        slash command or EOF is waiting and the turn must end so the REPL
+        handles it."""
+        inbox = self.inbox
+        if inbox is None or not inbox.pending():
+            return False
+        from .inbox import injection_text
+        lines = inbox.take_injectable()
+        if lines:
+            self.messages.append({"role": "user", "content": injection_text(lines)})
+            self.turn_messages_injected = getattr(self, "turn_messages_injected", 0) + len(lines)
+            self.on_event("message_injected", {"lines": lines})
+            # A slash command queued behind the lines ends the turn now (the
+            # lines stay in the conversation for the next turn); waiting one
+            # more model call for it could break the message_check_max_s bound.
+        return inbox.pending()
 
     def _limit_summary(self) -> str:
         """Ask the model, once and without tools, what it did, what is left,
