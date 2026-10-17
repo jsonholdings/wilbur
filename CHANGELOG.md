@@ -3,6 +3,9 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.36.0
+- `run.json` now carries `metrics`, the JSON Holdings shared agent-run record (`jh-agent-metrics` 0.1.0, schema 1), so the Home Base Agents board reads Wilbur and Claude runs with one schema and one token math: tokens (cache fields UNKNOWN, since ollama has no prompt cache), tokens/min and fresh/min over the last 5 minutes from a short cumulative sample ring (`metrics_samples`, also written), context (the last call's prompt size), calls, subagents and state. `usage` gains `context` (null before the first model call). The public build has no JH registry: the import is optional and run.json then has no `metrics` key. Private build pins the package in `requirements-gpu-queue.txt`; `tests/test_agent_metrics_pin.py` (not mirrored) fails on a version mismatch. A fault in the metrics path never costs the run.json write.
+
 ## 2.35.2
 - Tests: the suite can no longer write into the owner's real `~/.local/share/wilbur/sessions` or `~/.config/wilbur`. `tests/conftest.py` now points `WILBUR_CONFIG`, `WILBUR_SESSIONS`, `WILBUR_HISTORY` and `WILBUR_USER_SKILLS_DIR` at a throwaway directory before `wilbur.config` is imported, so a thread that outlives its test, or a subprocess a test starts, falls back to that directory instead of the real one (a `test_idle_exit_fires_after_a_h0-*.progress.md` had leaked into the real sessions dir). A session-wide guard fails the run if any `test_*` file appears in the real sessions dir; `tests/test_home_isolation.py` covers the redirect and proves the guard can fire.
 

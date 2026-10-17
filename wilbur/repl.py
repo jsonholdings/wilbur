@@ -588,6 +588,8 @@ class Repl:
         if kind == "assistant":
             self.stats["calls"] += 1
             self.stats["in_tokens"] += data.get("prompt_tokens", 0)
+            if "prompt_tokens" in data:
+                self.stats["last_prompt_tokens"] = data["prompt_tokens"]
             self.stats["out_tokens"] += data.get("tokens", 0)
             self.stats["seconds"] += data.get("seconds", 0.0)
             if getattr(self, "_run_started_at", None) is not None:

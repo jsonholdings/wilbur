@@ -60,7 +60,7 @@ def test_since_is_kept_when_given():
 def test_usage_from_stats_sums_tokens():
     u = runstate.usage_from_stats({"calls": 2, "in_tokens": 30, "out_tokens": 12, "seconds": 1.23456})
     assert u == {"prompt_tokens": 30, "completion_tokens": 12, "total_tokens": 42,
-                 "calls": 2, "seconds": 1.235}
+                 "context": None, "calls": 2, "seconds": 1.235}
 
 
 def test_repl_run_json_carries_started_at_and_cumulative_usage(monkeypatch, tmp_path):

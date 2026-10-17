@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config as _config
+from . import run_metrics
 
 # --- states ---
 WORKING = "working"
@@ -108,6 +109,15 @@ def write(session_id: str, *, state: str, reason: str | None = None,
             # `wilbur status --check` fails when it is older than 2x the bound.
             "unread_message_since": unread_message_since,
         }
+        # The shared agent-metrics record (private build; see wilbur/run_metrics.py).
+        # A metrics fault (bad usage/subagent row, module error) must never cost the run.json write.
+        try:
+            built = run_metrics.record(session_id, state=state, model=model, started_at=started_at,
+                                       usage=payload["usage"], subagents=read_subagents(session_id))
+        except Exception:  # noqa: BLE001 -- metrics are optional; the state write is not
+            built = None
+        if built is not None:
+            payload["metrics"], payload["metrics_samples"] = built
         p = path(session_id)
         _atomic_write(p, payload)
         return p
@@ -117,7 +127,7 @@ def write(session_id: str, *, state: str, reason: str | None = None,
 
 EMPTY_USAGE: dict[str, Any] = {
     "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-    "calls": 0, "seconds": 0.0,
+    "context": None, "calls": 0, "seconds": 0.0,
 }
 
 
@@ -125,9 +135,12 @@ def usage_from_stats(stats: dict[str, Any]) -> dict[str, Any]:
     """Map the Repl's `/cost` counters onto run.json's `usage` object."""
     prompt = int(stats.get("in_tokens", 0) or 0)
     completion = int(stats.get("out_tokens", 0) or 0)
+    context = stats.get("last_prompt_tokens")
     return {
         "prompt_tokens": prompt, "completion_tokens": completion,
         "total_tokens": prompt + completion,
+        # The last model call's prompt size; None (UNKNOWN) before the first call.
+        "context": int(context) if isinstance(context, (int, float)) and not isinstance(context, bool) else None,
         "calls": int(stats.get("calls", 0) or 0),
         "seconds": round(float(stats.get("seconds", 0.0) or 0.0), 3),
     }
@@ -208,6 +221,7 @@ def remove(session_id: str) -> bool:
         subagents_path(session_id).unlink()
     except OSError:
         pass
+    run_metrics.forget(session_id)
     p = path(session_id)
     try:
         p.unlink()
