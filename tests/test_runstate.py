@@ -156,19 +156,19 @@ def _stop_out(monkeypatch, tmp_path, tty, **cfg_kw):
 def test_stop_is_loud_on_a_tty(monkeypatch, tmp_path):
     out = _stop_out(monkeypatch, tmp_path, tty=True)
     assert "STOPPED — horizon — idle since" in out
-    assert "\a" in out and "\x1b]0;wilbur: stopped (horizon)" in out
+    assert "\a" in out and "\x1b]2;\U0001F416 Wilbur: stopped (horizon)" in out
 
 
 def test_no_bell_or_title_off_a_tty(monkeypatch, tmp_path):
     out = _stop_out(monkeypatch, tmp_path, tty=False)
-    assert "STOPPED" in out and "\a" not in out and "\x1b]0;" not in out
+    assert "STOPPED" in out and "\a" not in out and "\x1b]2;" not in out
 
 
 def test_stop_bell_and_set_title_switches(monkeypatch, tmp_path):
     out = _stop_out(monkeypatch, tmp_path, tty=True, stop_bell=False, set_title=False)
-    assert "STOPPED" in out and "\a" not in out and "\x1b]0;" not in out
+    assert "STOPPED" in out and "\a" not in out and "\x1b]2;" not in out
     out = _stop_out(monkeypatch, tmp_path, tty=True, stop_bell=True, set_title=False)
-    assert "\a" in out and "\x1b]0;" not in out
+    assert "\a" in out and "\x1b]2;" not in out
 
 
 # --- idle exit ----------------------------------------------------------------------

@@ -712,10 +712,18 @@ class Repl:
     def run(self) -> int:
         from .tools import agents_registry
         agents_registry.bind_persist(self._persist_subagents)
+        titled = (getattr(self.config, "set_title", True)
+                  and runstate.titles_enabled())
+        if titled:
+            sys.stdout.write(runstate.start_title(str(self.cwd), self.config.model))
+            sys.stdout.flush()
         try:
             self._start_inbox_watch()
             return self._run_loop()
         finally:
+            if titled:
+                sys.stdout.write(runstate.restore_title())
+                sys.stdout.flush()
             agents_registry.bind_persist(None)
             self._stop_inbox_watch()
             runstate.remove(self.session_id)  # clean exit: no stale run.json

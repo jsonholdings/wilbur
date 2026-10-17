@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.37.1
+- Publish fix: `tests/test_tab_identity.py` used a `/home/...` sample path, which the public-mirror scrub check rejects, so 2.37.0 reached the private origin but not the public mirror. The fixture now uses `/srv/proj`; no behaviour change.
+
+## 2.37.0
+- The terminal tab identifies Wilbur for the whole run: at start it reads `🐖 Wilbur · <cwd name> · <model>` (OSC 2 title plus OSC 1 icon name, the pig as the portable icon); while a turn runs it reads `🐖 Wilbur: working (n)` and on stop `🐖 Wilbur: stopped (<reason>) HH:MM`, so "Wilbur" is always in the tab. The previous title is pushed to the xterm title stack at start and restored on exit, error paths included (terminals without a title stack keep the last title). No escape sequences are written when stdout is not a terminal or TERM is empty/dumb.
+
 ## 2.36.0
 - `run.json` now carries `metrics`, the JSON Holdings shared agent-run record (`jh-agent-metrics` 0.1.0, schema 1), so the Home Base Agents board reads Wilbur and Claude runs with one schema and one token math: tokens (cache fields UNKNOWN, since ollama has no prompt cache), tokens/min and fresh/min over the last 5 minutes from a short cumulative sample ring (`metrics_samples`, also written), context (the last call's prompt size), calls, subagents and state. `usage` gains `context` (null before the first model call). The public build has no JH registry: the import is optional and run.json then has no `metrics` key. Private build pins the package in `requirements-gpu-queue.txt`; `tests/test_agent_metrics_pin.py` (not mirrored) fails on a version mismatch. A fault in the metrics path never costs the run.json write.
 

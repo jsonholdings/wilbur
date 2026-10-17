@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -313,17 +314,51 @@ def stop_banner(reason: str, since: float) -> str:
             f"\u2014 type continue to resume")
 
 
+TITLE_GLYPH = "\U0001F416"   # pig: the portable icon where OSC 1 is ignored
+TITLE_PUSH = "\x1b[22;0t"    # xterm title stack: save icon + window title
+TITLE_POP = "\x1b[23;0t"     # restore them (also covers crash paths via finally)
+
+
 def title_seq(text: str) -> str:
-    """OSC 0: set the terminal window/tab title."""
-    return f"\x1b]0;{text}\x07"
+    """OSC 2 (window/tab title) plus OSC 1 (icon name)."""
+    text = text.replace("\x1b", "").replace("\x07", "")
+    return f"\x1b]2;{text}\x07\x1b]1;{text}\x07"
+
+
+def identity(cwd: str = "", model: str = "") -> str:
+    parts = [f"{TITLE_GLYPH} Wilbur"]
+    base = os.path.basename(str(cwd).rstrip("/")) if cwd else ""
+    if base:
+        parts.append(base)
+    if model:
+        parts.append(model)
+    return " \u00b7 ".join(parts)
+
+
+def titles_enabled(stream=None) -> bool:
+    stream = stream if stream is not None else sys.stdout
+    if os.environ.get("TERM", "") in ("", "dumb"):
+        return False
+    try:
+        return bool(stream.isatty())
+    except Exception:
+        return False
+
+
+def start_title(cwd: str = "", model: str = "") -> str:
+    return TITLE_PUSH + title_seq(identity(cwd, model))
+
+
+def restore_title() -> str:
+    return TITLE_POP
 
 
 def working_title(rounds: int) -> str:
-    return title_seq(f"wilbur: working ({rounds})")
+    return title_seq(f"{TITLE_GLYPH} Wilbur: working ({rounds})")
 
 
 def stopped_title(reason: str, since: float) -> str:
-    return title_seq(f"wilbur: stopped ({reason}) {_hhmm(since)}")
+    return title_seq(f"{TITLE_GLYPH} Wilbur: stopped ({reason}) {_hhmm(since)}")
 
 
 # Idle-exit process exit codes, one per stop reason, so a supervisor can tell
