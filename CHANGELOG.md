@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.37.3
+- gpu-lease re-vendored at jh-gpu-lease 0.4.3: a SIGTERM/SIGHUP to a process holding an ADMITTED lease now completes the lease at once instead of leaving gq to expire it (only where the signal is still at its default action; `wilbur loop` keeps its own stop handler).
+
+## 2.37.2
+- `contrib/wilbur-watch/watch.sh` (private build): the health watchdog reads `wilbur status --check` instead of guessing from session-file age and `pgrep`, logs each run row, notifies once per transition into ALERT, and exits 0/1/2 (a missing wilbur binary is UNKNOWN). Sample unit `contrib/systemd/wilbur-watch.service`. Also ships VS Code extension 0.5.0 (a "Wilbur" terminal profile with the pig tab icon) and agent-team 0.3.0 docs/config.
+
 ## 2.37.1
 - Publish fix: `tests/test_tab_identity.py` used a `/home/...` sample path, which the public-mirror scrub check rejects, so 2.37.0 reached the private origin but not the public mirror. The fixture now uses `/srv/proj`; no behaviour change.
 

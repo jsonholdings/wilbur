@@ -248,6 +248,67 @@ function newWilburSession() {
   return terminal;
 }
 
+const TERMINAL_PROFILE_ID = "wilbur.terminal-profile";
+// Set on a terminal opened from the "Wilbur" entry in the terminal panel's
+// profile dropdown, so onDidOpenTerminal can adopt it as a session.
+const PROFILE_MARKER_ENV = "WILBUR_TERMINAL_PROFILE";
+
+/**
+ * Terminal options for the contributed "Wilbur" terminal profile.
+ *
+ * Unlike the command-launched terminals, a profile terminal runs wilbur as
+ * the terminal's own process (shellPath/shellArgs) rather than typing a
+ * launch line into a shell, so there is no shell for another extension to
+ * inject text into. The tab carries the same pig icon and colour as every
+ * other Wilbur terminal. Returns null when the wilbur CLI cannot be found.
+ */
+function buildTerminalProfileOptions() {
+  const { wilburPath, useFlatpakSpawn } = getConfig();
+  if (!isWilburAvailable(wilburPath, useFlatpakSpawn)) {
+    warnWilburNotFound(wilburPath);
+    return null;
+  }
+  const env = { WILBUR_SURFACE: "vscode", [PROFILE_MARKER_ENV]: "1" };
+  const argv = buildLaunchArgv({
+    wilburPath,
+    useFlatpakSpawn,
+    args: launchExtraArgs(),
+    env,
+  });
+  return {
+    name: TERMINAL_NAME,
+    shellPath: argv[0],
+    shellArgs: argv.slice(1),
+    cwd: workspaceCwd(),
+    env,
+    iconPath: vscode.Uri.joinPath(
+      vscode.Uri.file(__dirname),
+      "..",
+      "media",
+      "wilbur-tab.svg",
+    ),
+    color: new vscode.ThemeColor("terminal.ansiRed"),
+    isTransient: true,
+  };
+}
+
+const wilburTerminalProfileProvider = {
+  provideTerminalProfile() {
+    const options = buildTerminalProfileOptions();
+    if (!options) {
+      throw new Error("Wilbur: the wilbur CLI was not found (see wilbur.path).");
+    }
+    return vscode.TerminalProfile
+      ? new vscode.TerminalProfile(options)
+      : { options };
+  },
+};
+
+function isProfileTerminal(terminal) {
+  const opts = terminal && terminal.creationOptions;
+  return Boolean(opts && opts.env && opts.env[PROFILE_MARKER_ENV] === "1");
+}
+
 /** Pick which live session subsequent sends target, and focus it. */
 function focusWilburSession() {
   pruneSessions();
@@ -727,6 +788,17 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand("wilbur.open", openWilbur),
     vscode.commands.registerCommand("wilbur.newSession", newWilburSession),
+    vscode.window.registerTerminalProfileProvider
+      ? vscode.window.registerTerminalProfileProvider(
+          TERMINAL_PROFILE_ID,
+          wilburTerminalProfileProvider
+        )
+      : { dispose: () => {} },
+    vscode.window.onDidOpenTerminal
+      ? vscode.window.onDidOpenTerminal((t) => {
+          if (isProfileTerminal(t)) adoptSession(t);
+        })
+      : { dispose: () => {} },
     vscode.commands.registerCommand("wilbur.focusSession", focusWilburSession),
     vscode.commands.registerCommand(
       "wilbur.askAboutSelection",
@@ -780,4 +852,8 @@ function deactivate() {
   }
 }
 
-module.exports = { activate, deactivate };
+module.exports = {
+  activate,
+  deactivate,
+  _test: { buildTerminalProfileOptions, wilburTerminalProfileProvider, isProfileTerminal },
+};

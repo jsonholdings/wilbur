@@ -20,6 +20,8 @@ const EXTENSION_PATH = path.join(__dirname, "..", "src", "extension.js");
 function makeFakeVscode() {
   const registeredCommands = new Map();
   const createdTerminals = [];
+  const profileProviders = new Map();
+  const openTerminalListeners = [];
   const configValues = {
     "wilbur.path": "wilbur",
     "wilbur.useFlatpakSpawn": "off", // avoid touching /.flatpak-info in CI
@@ -56,6 +58,9 @@ function makeFakeVscode() {
     },
     CodeAction: class CodeAction {
       constructor(title, kind) { this.title = title; this.kind = kind; }
+    },
+    TerminalProfile: class TerminalProfile {
+      constructor(options) { this.options = options; }
     },
     TreeItem: class TreeItem {
       constructor(label, state) { this.label = label; this.state = state; }
@@ -96,6 +101,14 @@ function makeFakeVscode() {
       terminals: [],
       onDidCloseTerminal: () => ({ dispose() {} }),
       registerTreeDataProvider: () => ({ dispose() {} }),
+      registerTerminalProfileProvider: (id, provider) => {
+        profileProviders.set(id, provider);
+        return { dispose() {} };
+      },
+      onDidOpenTerminal: (listener) => {
+        openTerminalListeners.push(listener);
+        return { dispose() {} };
+      },
       showErrorMessage: () => Promise.resolve(undefined),
       showWarningMessage: () => Promise.resolve(undefined),
       showInformationMessage: () => Promise.resolve(undefined),
@@ -113,7 +126,7 @@ function makeFakeVscode() {
     },
   };
 
-  return { vscode, registeredCommands, createdTerminals };
+  return { vscode, registeredCommands, createdTerminals, profileProviders, openTerminalListeners };
 }
 
 // extension.js's status-bar poll calls the real `http` module to reach
@@ -365,5 +378,55 @@ test("wilbur.focusSession is registered and tolerates having no sessions", (t) =
   assert.ok(focus, "wilbur.focusSession must be registered");
   return Promise.resolve(focus()).then((r) => {
     assert.equal(r, undefined, "no sessions open must not throw");
+  });
+});
+
+test("terminal profile: activate() registers the contributed profile id without opening anything", (t) => {
+  const { extension, fake } = loadExtensionWithFakeVscode();
+  activateAndTrack(t, extension);
+  const pkg = require("../package.json");
+  const contributed = pkg.contributes.terminal.profiles.map((p) => p.id);
+  assert.deepEqual(contributed, ["wilbur.terminal-profile"]);
+  assert.ok(pkg.activationEvents.includes("onTerminalProfile:wilbur.terminal-profile"));
+  assert.ok(fake.profileProviders.has("wilbur.terminal-profile"), "provider must be registered for the contributed id");
+  assert.equal(pkg.contributes.terminal.profiles[0].icon, "media/wilbur-tab.svg");
+  assert.ok(require("node:fs").existsSync(path.join(__dirname, "..", "media", "wilbur-tab.svg")));
+  assert.equal(fake.createdTerminals.length, 0, "registering a profile must not create a terminal");
+});
+
+test("terminal profile: runs wilbur as the process with the pig icon, transient, surface env set", (t) => {
+  const { extension, fake } = loadExtensionWithFakeVscode();
+  activateAndTrack(t, extension);
+  const profile = fake.profileProviders.get("wilbur.terminal-profile").provideTerminalProfile();
+  const o = profile.options;
+  assert.equal(o.name, "Wilbur");
+  assert.equal(o.shellPath, "wilbur");
+  assert.ok(Array.isArray(o.shellArgs));
+  assert.ok(o.iconPath.fsPath.endsWith("media/wilbur-tab.svg"));
+  assert.equal(o.color.id, "terminal.ansiRed");
+  assert.equal(o.isTransient, true);
+  assert.equal(o.env.WILBUR_SURFACE, "vscode");
+  assert.equal(o.cwd, "/fake/workspace");
+});
+
+test("terminal profile: a profile terminal is adopted as a session, an unrelated terminal is not", (t) => {
+  const { extension, fake } = loadExtensionWithFakeVscode();
+  activateAndTrack(t, extension);
+  const { isProfileTerminal } = extension._test;
+  const profile = fake.profileProviders.get("wilbur.terminal-profile").provideTerminalProfile();
+  const mine = { name: "Wilbur", creationOptions: profile.options, show() {} };
+  const other = { name: "bash", creationOptions: { env: { FOO: "1" } }, show() {} };
+  assert.equal(isProfileTerminal(mine), true);
+  assert.equal(isProfileTerminal(other), false);
+  assert.equal(isProfileTerminal({ name: "x" }), false);
+  assert.equal(fake.openTerminalListeners.length, 1);
+  let shown = 0;
+  mine.show = () => { shown += 1; };
+  fake.openTerminalListeners[0](other);
+  fake.vscode.window.terminals.push(mine, other);
+  fake.openTerminalListeners[0](mine);
+  return fake.registeredCommands.get("wilbur.focusSession")().then((picked) => {
+    assert.equal(picked, mine, "the profile terminal must be the one live session");
+    assert.equal(shown, 1);
   });
 });

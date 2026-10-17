@@ -2,7 +2,7 @@
   "name": "wilbur-vscode",
   "displayName": "Wilbur",
   "description": "Run Wilbur, the local offline coding agent (Ollama + a local model), in a VS Code terminal panel.",
-  "version": "0.4.5",
+  "version": "0.5.0",
   "icon": "media/icon.png",
   "publisher": "jsonholdings",
   "license": "Apache-2.0",
@@ -36,7 +36,8 @@
     "onCommand:wilbur.sessions",
     "onCommand:wilbur.switchModel",
     "onCommand:wilbur.sendProblems",
-    "onView:wilburActivityView"
+    "onView:wilburActivityView",
+    "onTerminalProfile:wilbur.terminal-profile"
   ],
   "main": "./src/extension.js",
   "contributes": {
@@ -159,6 +160,15 @@
           "description": "Context window size passed to wilbur via -c. 0 means unset (wilbur's own default)."
         }
       }
+    },
+    "terminal": {
+      "profiles": [
+        {
+          "id": "wilbur.terminal-profile",
+          "title": "Wilbur",
+          "icon": "media/wilbur-tab.svg"
+        }
+      ]
     }
   },
   "scripts": {

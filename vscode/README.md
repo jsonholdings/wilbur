@@ -25,7 +25,7 @@ From a `.vsix` (built from source):
 ```
 cd vscode
 npx @vscode/vsce package
-code --install-extension wilbur-vscode-0.3.0.vsix
+code --install-extension wilbur-vscode-0.5.0.vsix
 ```
 
 (On a Flatpak VS Code install, prefix both commands with
@@ -36,6 +36,10 @@ code --install-extension wilbur-vscode-0.3.0.vsix
 
 - **Wilbur: Open** (command palette, or the Wilbur icon in the activity bar) —
   opens a terminal running `wilbur` with its cwd set to the workspace root.
+- **Wilbur terminal profile** — the terminal panel's new-terminal dropdown
+  (and `Terminal: Create New Terminal (With Profile)`) lists **Wilbur** with
+  the pig tab icon. It runs `wilbur` as the terminal's own process and joins
+  the session list the send commands use.
 - **Wilbur: Ask about selection** (right-click a selection, or `ctrl+alt+w`) —
   sends the file path, line range and selected text into the Wilbur terminal
   as a prompt, starting Wilbur first if it isn't already running.

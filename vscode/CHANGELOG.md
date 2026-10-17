@@ -1,6 +1,15 @@
 # Changelog
 
 
+## 0.5.0
+
+- Add: a "Wilbur" terminal profile. The terminal panel's new-terminal dropdown
+  (and `Terminal: Create New Terminal (With Profile)`) lists Wilbur with the
+  pig tab icon and red tab colour. The profile runs wilbur as the terminal's
+  own process, so no shell sits in front of it, and the new terminal joins
+  the session list that `Wilbur: Focus Session` and the send commands use.
+
+
 ## 0.4.5
 
 - Change: terminals the extension opens set `WILBUR_SURFACE=vscode` (passed as
