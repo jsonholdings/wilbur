@@ -113,6 +113,35 @@ def test_write_is_atomic(monkeypatch):
     assert not list(sessions.SESSION_DIR.glob("*.tmp"))
 
 
+def test_concurrent_writers_use_distinct_tmp_files(monkeypatch):
+    """The incremental save and a oneshot's final save can write one session
+    at once; a shared tmp name would interleave their bytes before the rename."""
+    import threading
+    tmp_names = []
+    real_write = sessions.Path.write_text
+
+    def spy(self, data, *a, **kw):
+        tmp_names.append(self.name)
+        return real_write(self, data, *a, **kw)
+
+    monkeypatch.setattr(sessions.Path, "write_text", spy)
+    worker = threading.Thread(target=sessions.save, args=("same", "/p", [], RunState(), "m"))
+    worker.start()
+    worker.join()
+    sessions.save("same", "/p", [], RunState(), "m")
+    assert len(tmp_names) == 2 and tmp_names[0] != tmp_names[1], tmp_names
+    assert not list(sessions.SESSION_DIR.glob("*.tmp"))
+
+
+def test_failed_rename_leaves_no_tmp_file(monkeypatch):
+    def boom(self, target):
+        raise OSError("disk full")
+    monkeypatch.setattr(sessions.Path, "replace", boom)
+    assert sessions.save("fails", "/p", [], RunState(), "m") is None
+    assert not list(sessions.SESSION_DIR.glob("*.tmp"))
+    assert not (sessions.SESSION_DIR / "fails.json").exists()
+
+
 def test_listing_reports_newest_first():
     import time
     sessions.save("old", "/p", [], RunState(objective="old"), "m")

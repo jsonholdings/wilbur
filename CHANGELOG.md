@@ -3,6 +3,11 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.37.4
+- Session save writes through a per-writer tmp file (pid and thread in the name) and removes it when the write or rename fails, so two saves of one session cannot interleave bytes and a failed save leaves no stray `.tmp` (tests in tests/test_session.py).
+- RUNBOOK.md (private build): what runs where, start/stop, publish and the owner's local update (editable install), rollback, recovery and health checks.
+- BACKLOG: `deps-ownership` and `enterprise-gaps` lists.
+
 ## 2.37.3
 - gpu-lease re-vendored at jh-gpu-lease 0.4.3: a SIGTERM/SIGHUP to a process holding an ADMITTED lease now completes the lease at once instead of leaving gq to expire it (only where the signal is still at its default action; `wilbur loop` keeps its own stop handler).
 

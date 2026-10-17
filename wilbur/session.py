@@ -11,6 +11,8 @@ lose the thread, which on a local model is most of what matters.
 from __future__ import annotations
 
 import json
+import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -46,10 +48,17 @@ def save(session_id: str, cwd: str, messages: list[dict[str, Any]],
             "state": state.to_dict(),
             "messages": messages[-MAX_SAVED_MESSAGES:],
         }
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload))
-        tmp.replace(path)                       # atomic; a half-written session
-        return path                             # is worse than none at all
+        # A per-writer tmp name: the incremental save and a oneshot's final
+        # save may write one session at once, and a shared tmp would
+        # interleave their bytes before the rename.
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            tmp.write_text(json.dumps(payload))
+            tmp.replace(path)                   # atomic; a half-written session
+        except OSError:                         # is worse than none at all
+            tmp.unlink(missing_ok=True)
+            raise
+        return path
     except OSError:
         return None
 
