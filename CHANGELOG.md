@@ -3,6 +3,9 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.35.2
+- Tests: the suite can no longer write into the owner's real `~/.local/share/wilbur/sessions` or `~/.config/wilbur`. `tests/conftest.py` now points `WILBUR_CONFIG`, `WILBUR_SESSIONS`, `WILBUR_HISTORY` and `WILBUR_USER_SKILLS_DIR` at a throwaway directory before `wilbur.config` is imported, so a thread that outlives its test, or a subprocess a test starts, falls back to that directory instead of the real one (a `test_idle_exit_fires_after_a_h0-*.progress.md` had leaked into the real sessions dir). A session-wide guard fails the run if any `test_*` file appears in the real sessions dir; `tests/test_home_isolation.py` covers the redirect and proves the guard can fire.
+
 ## 2.35.1
 - Publishing: `tests/test_jh_source.py` is no longer copied to the public mirror. It imports `voice/`, which the mirror does not carry, so the mirror's test run failed at collection and 2.33.2–2.35.0 never reached the public repo.
 

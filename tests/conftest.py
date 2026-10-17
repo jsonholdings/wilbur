@@ -20,6 +20,28 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# Point every env-overridable Wilbur path at a throwaway directory BEFORE
+# wilbur.config is imported, so the import-time defaults are never the
+# owner's real ~/.local/share/wilbur or ~/.config/wilbur. The per-test
+# `isolate_wilbur_home` monkeypatch alone was not enough: a repl thread that
+# outlived its test (monkeypatch already undone) appended
+# `test_idle_exit_fires_after_a_h0-*.progress.md` to the REAL sessions dir
+# (2026-10-16), and subprocesses a test spawns inherit only the env. Forced,
+# not setdefault, so a shell that exports the real paths cannot leak either.
+import atexit
+import shutil
+import tempfile
+
+_TEST_WILBUR_HOME = Path(tempfile.mkdtemp(prefix="wilbur-tests-"))
+atexit.register(shutil.rmtree, _TEST_WILBUR_HOME, True)
+os.environ["WILBUR_CONFIG"] = str(_TEST_WILBUR_HOME / "config.json")
+os.environ["WILBUR_SESSIONS"] = str(_TEST_WILBUR_HOME / "sessions")
+os.environ["WILBUR_HISTORY"] = str(_TEST_WILBUR_HOME / "history")
+os.environ["WILBUR_USER_SKILLS_DIR"] = str(_TEST_WILBUR_HOME / "skills")
+# The owner's real sessions dir, computed independently of wilbur.config,
+# for the session-wide guard below.
+_REAL_SESSIONS_DIR = Path.home() / ".local" / "share" / "wilbur" / "sessions"
+
 import pytest
 
 import wilbur.agent as agent_mod
@@ -176,11 +198,21 @@ def isolate_wilbur_home(monkeypatch, tmp_path):
         monkeypatch.setattr(repl_mod, "HISTORY_PATH", fake_history)
 
 
-# Captured at import time, before `isolate_wilbur_home` (or anything else)
-# has a chance to monkeypatch config_mod.CONFIG_PATH -- this is the one
-# owner-real path the guard below must prove untouched.
-_REAL_CONFIG_PATH = config_mod.CONFIG_PATH
-_REAL_HISTORY_PATH = config_mod.HISTORY_PATH
+# The owner-real paths the guard below must prove untouched. Computed from
+# $HOME, not config_mod, because the env redirect above already points
+# config_mod's import-time defaults at the throwaway directory.
+_REAL_CONFIG_PATH = Path.home() / ".config" / "wilbur" / "config.json"
+_REAL_HISTORY_PATH = Path.home() / ".config" / "wilbur" / "history"
+
+
+def _test_named_sessions() -> set[str]:
+    """Files in the REAL sessions dir whose name a test produced. A test's
+    session id starts with its function name ("test_..."); the owner's live
+    Wilbur may add its own files during the suite, and those are not ours."""
+    try:
+        return {p.name for p in _REAL_SESSIONS_DIR.iterdir() if p.name.startswith("test_")}
+    except FileNotFoundError:
+        return set()
 
 
 def _snapshot(path: Path):
@@ -203,7 +235,13 @@ def guard_real_wilbur_home():
     """
     before_config = _snapshot(_REAL_CONFIG_PATH)
     before_history = _snapshot(_REAL_HISTORY_PATH)
+    before_sessions = _test_named_sessions()
     yield
+    leaked_sessions = sorted(_test_named_sessions() - before_sessions)
+    assert not leaked_sessions, (
+        f"tests/conftest.py isolation failed: tests wrote {leaked_sessions} "
+        f"into the real {_REAL_SESSIONS_DIR}"
+    )
     after_config = _snapshot(_REAL_CONFIG_PATH)
     after_history = _snapshot(_REAL_HISTORY_PATH)
     assert after_config == before_config, (
