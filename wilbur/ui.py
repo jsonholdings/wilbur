@@ -158,6 +158,24 @@ class Spinner:
         self._paused = threading.Event()
         self._thread: threading.Thread | None = None
         self._start = 0.0
+        # The model call's live phase ("reading 48,813 tokens", "thinking",
+        # "writing") and when it began, so a long prompt read shows its own
+        # ticking seconds instead of looking frozen. None between calls.
+        self.phase: str | None = None
+        self._phase_start = 0.0
+
+    def set_phase(self, text: str | None) -> None:
+        self.phase = text
+        self._phase_start = time.time()
+
+    def status_text(self) -> str:
+        """`Thinking... (40s)`, or with a live model phase
+        `reading 48,813 tokens 12s · turn 40s`."""
+        elapsed = int(time.time() - self._start) if self._start else 0
+        if self.phase:
+            return (f"{self.phase} {int(time.time() - self._phase_start)}s"
+                    f" · turn {elapsed}s")
+        return f"{self.label}... ({elapsed}s)"
 
     def __enter__(self) -> "Spinner":
         self._start = time.time()
@@ -196,7 +214,6 @@ class Spinner:
                 self._stop.wait(0.05)
                 continue
             glyph = SPINNER[i % len(SPINNER)]
-            elapsed = int(time.time() - self._start)
             extra = ""
             if self.status_fn is not None:
                 try:
@@ -206,7 +223,7 @@ class Spinner:
                 if text:
                     extra = f"  {GREY}{text}{RESET}"
             sys.stdout.write(
-                f"\r\033[2K{ACCENT}{glyph}{RESET} {GREY}{self.label}... ({elapsed}s){RESET}{extra}"
+                f"\r\033[2K{ACCENT}{glyph}{RESET} {GREY}{self.status_text()}{RESET}{extra}"
             )
             sys.stdout.flush()
             i += 1

@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.38.0
+- Prompt-prefix cache stays warm between calls. The harness briefing (objective, plan, failure ledger) is now sent as the last message of each call, as a user-role note, and is never stored in the transcript; it used to be pinned right after the system prompt and regenerated every turn, so any plan tick or new failure made Ollama re-read the whole history (48,813 and 49,402 tokens, ~48 s each, on consecutive turns). A system-role briefing at the end would not help: Ollama collates every system message into the top block. A restored pre-2.38 session drops its stored briefing on the first call (tests in tests/test_prompt_cache_prefix.py).
+- `/compact` compacts the history now and prints tokens before -> after; with too little history it says so.
+- Live status line during model calls: `reading ~N tokens`, then `thinking`, then `writing`, each with its own elapsed seconds and the turn total. The Ollama client now streams (`stream: true`) and folds the chunks into one reply.
+- Stall handling: no bytes from the model server for `first_token_timeout_s` (default 120 s) raises "model server not responding" at once instead of a silent wait of up to 600 s per attempt with retries; `/retry` asks again. Connection failures and 5xx are still retried with backoff. A null `prompt_eval_count`/`eval_count` is read as 0 (tests in tests/test_responsiveness.py).
+
 ## 2.37.5
 - Compaction triggers on the real prompt size. `_maybe_compact` now uses the larger of the chars/token estimate and the prompt_tokens Ollama reported for the last call plus the estimate of what was added since, and the estimate counts the tool schema sent with every call. A long session whose estimate (45,004) sat just under the 45,056 budget while the real prompt was 64,582 of 65,536 never compacted and stopped with `empty_reply`.
 - An empty reply that comes back with the window full (prompt_tokens within `reserve_output` of `num_ctx`) is compacted and retried once instead of counting toward the empty-reply stop (tests in tests/test_compact_real_prompt.py).

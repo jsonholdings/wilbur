@@ -166,8 +166,9 @@ def test_turn_limit_asks_for_a_summary_without_touching_the_transcript(make_agen
     # call is never appended to the transcript.
     assert len(client.seen) == 4
     assert client.seen[-1][-1]["content"].startswith("You have used up the tool-round budget")
-    # briefing + user turn + 3 x (assistant + tool result); no summary turn added.
-    assert len(a.messages) == before + 8
+    # user turn + 3 x (assistant + tool result); no summary turn added. The
+    # briefing rides on each outgoing call and is never stored (2.38.0).
+    assert len(a.messages) == before + 7
     assert a.messages[-1]["role"] == "tool"
 
 
@@ -232,11 +233,13 @@ def test_objective_is_captured_verbatim_and_pinned_every_turn(make_agent):
 
     assert a.state.objective == "RENAME the widget to gadget, exactly"
     for sent in client.seen:
-        pinned = [m for m in sent if m["role"] == "system"
-                  and "[wilbur:briefing]" in (m.get("content") or "")]
+        pinned = [m for m in sent if "[wilbur:briefing]" in (m.get("content") or "")]
         assert len(pinned) == 1, "briefing missing or duplicated on a turn"
         assert "RENAME the widget to gadget, exactly" in pinned[0]["content"]
-        assert sent.index(pinned[0]) == 1, "briefing must sit directly after the system prompt"
+        # Last, and not a system message: Ollama collates every system message
+        # into the top block, which would bust the prompt-prefix cache.
+        assert sent[-1] is pinned[0], "briefing must be the last message sent"
+        assert pinned[0]["role"] != "system"
 
 
 def test_briefing_is_replaced_not_appended(make_agent):
@@ -246,9 +249,10 @@ def test_briefing_is_replaced_not_appended(make_agent):
                             Reply(content="", tool_calls=[call("read_file", path="a.txt")]),
                             say("ok")])
     a.run("do the thing")
-    briefings = [m for m in a.messages if m["role"] == "system"
-                 and "[wilbur:briefing]" in (m.get("content") or "")]
-    assert len(briefings) == 1
+    for sent in client.seen:
+        briefings = [m for m in sent if "[wilbur:briefing]" in (m.get("content") or "")]
+        assert len(briefings) == 1
+    assert not [m for m in a.messages if "[wilbur:briefing]" in (m.get("content") or "")]
 
 
 def test_a_failed_tool_call_enters_the_ledger(make_agent):

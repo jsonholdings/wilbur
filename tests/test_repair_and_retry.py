@@ -124,6 +124,9 @@ def test_retry_succeeds_after_transient_failures_with_backoff(monkeypatch):
         def read(self):
             return body
 
+        def readline(self, _lines=[body]):
+            return _lines.pop() if _lines else b""
+
     def fake_urlopen(request, timeout=None):
         calls["n"] += 1
         if calls["n"] < 3:

@@ -181,6 +181,27 @@ class TransientOllamaError(Exception):
     wrapped here -- retrying a client error just repeats the same failure."""
 
 
+class ModelNotResponding(Exception):
+    """No bytes arrived from the model server within the stall window.
+
+    Raised instead of retrying: before 2.38.0 a stalled server meant a silent
+    wait of up to `timeout` (600 s) per attempt, times 4 attempts, with
+    nothing on screen -- which reads as Wilbur having frozen."""
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+        super().__init__(
+            f"model server not responding (no output for {seconds:.0f}s). "
+            "Check that Ollama is up, then type /retry to try again.")
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return True
+    return (isinstance(exc, urllib.error.URLError)
+            and isinstance(getattr(exc, "reason", None), (socket.timeout, TimeoutError)))
+
+
 def _is_transient(exc: Exception) -> bool:
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code >= 500
@@ -254,6 +275,14 @@ class OllamaClient:
         self.backoff_base = backoff_base
         self._sleep = sleep
         self.constrained_tool_calls = False  # opt-in: Config.constrained_tool_calls
+        # Longest silence (no bytes at all) tolerated from the server before
+        # ModelNotResponding: covers prompt reading before the first token,
+        # and any gap between streamed chunks. Config.first_token_timeout_s.
+        self.stall_timeout: float = 120.0
+        # Called as on_progress(phase, info) while a streamed reply arrives:
+        # phase is "thinking", "writing" or "done". Set by the Agent.
+        self.on_progress: Any = None
+        self._clock = time.monotonic
 
     def _post(self, request: urllib.request.Request) -> dict[str, Any]:
         """Send one request, retrying only transient failures with capped
@@ -270,6 +299,81 @@ class OllamaClient:
                 self._sleep(self.backoff_base * (2 ** attempt))
                 attempt += 1
 
+    def _progress(self, phase: str, **info: Any) -> None:
+        if self.on_progress is not None:
+            try:
+                self.on_progress(phase, info)
+            except Exception:  # noqa: BLE001 -- display must never break a call
+                pass
+
+    def _stream(self, request: urllib.request.Request) -> dict[str, Any]:
+        """POST a streaming chat and fold the NDJSON chunks into one
+        non-streamed-shaped response.
+
+        The socket timeout is the stall window, so it bounds every silence:
+        the wait for the first byte (model load + prompt reading) and each gap
+        between chunks. A stall raises ModelNotResponding at once; only a
+        failure to connect (or a 5xx) is retried with backoff."""
+        attempt = 0
+        while True:
+            try:
+                response = urllib.request.urlopen(request, timeout=self.stall_timeout)
+                break
+            except Exception as exc:  # noqa: BLE001 -- classified below
+                if _is_timeout(exc):
+                    raise ModelNotResponding(self.stall_timeout) from exc
+                if not _is_transient(exc) or attempt >= self.max_retries:
+                    raise
+                self._sleep(self.backoff_base * (2 ** attempt))
+                attempt += 1
+
+        content: list[str] = []
+        thinking: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+        final: dict[str, Any] = {}
+        phase = ""
+        started = self._clock()
+        with response:
+            while True:
+                try:
+                    line = response.readline()
+                except Exception as exc:  # noqa: BLE001
+                    if _is_timeout(exc):
+                        raise ModelNotResponding(self.stall_timeout) from exc
+                    raise
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                chunk = json.loads(line)
+                if chunk.get("error"):
+                    raise RuntimeError(f"ollama: {chunk['error']}")
+                message = chunk.get("message") or {}
+                if message.get("thinking"):
+                    thinking.append(message["thinking"])
+                    if phase != "thinking":
+                        phase = "thinking"
+                        self._progress("thinking")
+                if message.get("content"):
+                    content.append(message["content"])
+                    if phase != "writing":
+                        phase = "writing"
+                        self._progress("writing")
+                tool_calls.extend(message.get("tool_calls") or [])
+                final = chunk  # a server that ignores stream=True sends one object
+                if chunk.get("done"):
+                    break
+                if self.timeout and self._clock() - started > self.timeout:
+                    raise ModelNotResponding(self.timeout)
+        self._progress("done", prompt_tokens=final.get("prompt_eval_count") or 0)
+        return {
+            "message": {"content": "".join(content), "thinking": "".join(thinking),
+                        "tool_calls": tool_calls},
+            "prompt_eval_count": final.get("prompt_eval_count") or 0,
+            "eval_count": final.get("eval_count") or 0,
+        }
+
     def chat(
         self,
         messages: list[dict[str, Any]],
@@ -283,7 +387,7 @@ class OllamaClient:
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "stream": False,
+            "stream": True,
             "options": {"temperature": temperature, "top_p": top_p, "num_ctx": num_ctx},
         }
         if tools:
@@ -297,7 +401,7 @@ class OllamaClient:
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
-        data = self._post(request)
+        data = self._stream(request)
 
         message = data.get("message", {})
         content = message.get("content", "") or ""
@@ -325,6 +429,6 @@ class OllamaClient:
             content=content,
             tool_calls=calls,
             thinking=message.get("thinking", "") or "",
-            prompt_tokens=data.get("prompt_eval_count", 0),
-            eval_tokens=data.get("eval_count", 0),
+            prompt_tokens=data.get("prompt_eval_count") or 0,
+            eval_tokens=data.get("eval_count") or 0,
         )

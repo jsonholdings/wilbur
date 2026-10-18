@@ -18,6 +18,12 @@ WRITE = Reply(content="working", tool_calls=[call("write_file", path="out.txt", 
 DONE = say(f"All set.\n{loop.GOAL_COMPLETE}")
 
 
+
+def _last_prompt(sent):
+    """The last message of a call, skipping the per-call harness briefing that
+    rides at the end since 2.38.0."""
+    return [m for m in sent if "[wilbur:briefing]" not in (m.get("content") or "")][-1]
+
 def _git(repo, *args):
     return subprocess.run(["git", "-C", str(repo), *args], check=True,
                           capture_output=True, text=True).stdout.strip()
@@ -50,7 +56,7 @@ def test_text_only_reply_no_longer_ends_the_work(make_agent):
     result = loop.run_goal_loop(agent, "write out.txt", max_turns=5)
     assert result.status == "unverified"  # no check given: the model's word only
     assert result.turns == 3
-    assert "Loop mode, turn 2" in client.seen[1][-1]["content"]
+    assert "Loop mode, turn 2" in _last_prompt(client.seen[1])["content"]
 
 
 def test_done_needs_the_check_to_pass(make_agent):
@@ -68,7 +74,7 @@ def test_failed_check_is_fed_back(make_agent):
     agent, client = make_agent([DONE, DONE])
     result = loop.run_goal_loop(agent, "g", max_turns=2, check=lambda: (False, "make test exited 2"))
     assert result.status == "turn_cap"
-    assert "make test exited 2" in client.seen[1][-1]["content"]
+    assert "make test exited 2" in _last_prompt(client.seen[1])["content"]
 
 
 def test_turn_cap(make_agent):

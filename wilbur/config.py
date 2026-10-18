@@ -67,6 +67,11 @@ class Config:
     # --check` fails on one left unread past 2x this.
     message_check_max_s: float = 60.0
     request_timeout: int = 600
+    # Longest silence (no bytes) from the model server before Wilbur reports
+    # "model server not responding" and offers /retry, instead of waiting out
+    # request_timeout. Covers model load + prompt reading before the first
+    # token (~60 s for 64k tokens at 1,100 tok/s on this card).
+    first_token_timeout_s: int = 120
     # A `task` subagent runs synchronously inside one of the parent's tool
     # calls, so nothing else bounds its wall time: max_turns * request_timeout
     # is its theoretical ceiling (up to 10h) with zero visibility to the user

@@ -23,6 +23,7 @@ from . import team as team_mod
 from . import ui
 from . import runstate
 from .agent import Agent
+from .llm import ModelNotResponding
 from .inbox import Inbox, poll_interval
 from .config import Config, HISTORY_PATH
 from . import persona as persona_mod
@@ -55,6 +56,7 @@ HELP = """  Model
   Turn
   /turns [n]        show or set the tool-round limit per message
   /continue         resume the last task with a fresh round budget
+  /retry            try again after "model server not responding"
   /tools            list available tools
   /approve <mode>   ask | auto-edit | all
   /team [on|off|auto]  team mode: plan -> code -> test -> review -> merge
@@ -63,6 +65,7 @@ HELP = """  Model
   /loop <goal>      keep working turn after turn until the goal is done and checked
                     (caps: loop_max_turns, loop_max_minutes; Ctrl-C stops)
   /keepgoing [on|off]  auto-continue a multi-item prompt between items (default on)
+  /compact          summarise older history now (shows tokens before -> after)
   /clear            start a fresh conversation
   /cost             tokens and timing for this session
   /queue            show commands typed and queued during the current turn
@@ -75,7 +78,7 @@ HELP = """  Model
 
 
 _SLASH_COMMANDS = (
-    "/model", "/search", "/pull", "/context", "/turns", "/continue", "/tools",
+    "/model", "/search", "/pull", "/context", "/turns", "/continue", "/retry", "/compact", "/tools",
     "/approve", "/team", "/loop", "/keepgoing", "/clear", "/cost", "/queue", "/queue clear", "/agents",
     "/help", "/exit",
 )
@@ -505,8 +508,7 @@ class Repl:
         lines = []
         spinner = getattr(self, "_spinner", None)
         if spinner is not None:
-            elapsed = int(time.time() - spinner._start) if spinner._start else 0
-            status = f"{spinner.label}... ({elapsed}s)"
+            status = spinner.status_text()
             agents = self._agents_status_line()
             if agents:
                 status += f"  {agents}"
@@ -586,6 +588,9 @@ class Repl:
 
     def _on_event(self, kind: str, data: dict) -> None:
         if kind == "assistant":
+            spinner = getattr(self, "_spinner", None)
+            if spinner is not None:
+                spinner.set_phase(None)
             self.stats["calls"] += 1
             self.stats["in_tokens"] += data.get("prompt_tokens", 0)
             if "prompt_tokens" in data:
@@ -607,6 +612,10 @@ class Repl:
         elif kind == "tool_end":
             print(ui.tool_result(data.get("output", ""), data.get("error", False),
                                   seconds=data.get("seconds")))
+        elif kind == "model_phase":
+            spinner = getattr(self, "_spinner", None)
+            if spinner is not None:
+                spinner.set_phase(_phase_text(data))
         elif kind == "compact":
             print(ui.notice(
                 f"compacted context: {data['before_tokens']:,} -> "
@@ -775,7 +784,12 @@ class Repl:
                 if line.lower() in {"/queue", "/queue clear", "/queue-clear"}:
                     self._queue_command(line.lower())
                     continue
-                if line.lower() == "/continue":
+                if line.lower() == "/retry":
+                    # After a stall the last user message is still the tail of
+                    # the transcript with no reply; "continue" re-asks the
+                    # model with the same context plus a one-word nudge.
+                    line = "continue"
+                elif line.lower() == "/continue":
                     # Not a harness command: falls through to an ordinary turn,
                     # so it gets the normal fresh-round-budget-per-message
                     # behaviour "continue" already has, typed either way.
@@ -814,6 +828,10 @@ class Repl:
             except KeyboardInterrupt:
                 print(ui.notice("interrupted -- queued commands are kept"))
                 self._enter_stopped(runstate.USER_INTERRUPT)
+                continue
+            except ModelNotResponding as exc:
+                print(ui.error(str(exc)))
+                self._enter_stopped(runstate.ERROR)
                 continue
             except Exception as exc:
                 print(ui.error(f"{type(exc).__name__}: {exc}"))
@@ -1176,6 +1194,8 @@ class Repl:
                               f"{self.config.run_safety_max_minutes // 60}h; "
                               "say \"all night\" / \"for 3 hours\" to set a horizon)")
                 print(ui.notice(f"keep going: on -- {limit}"))
+        elif cmd == "/compact":
+            self._compact_command()
         elif cmd == "/clear":
             from .state import RunState
             self.state = RunState()
@@ -1517,6 +1537,27 @@ class Repl:
         self.config.save()
         print(ui.success(f"tool-round limit: {value} per message"))
 
+    def _compact_command(self) -> None:
+        """Compact now instead of waiting for the automatic threshold."""
+        if not self._gpu_gate("/compact"):
+            return
+        print(ui.notice("compacting..."))
+        try:
+            before, after, changed = self.agent.compact_now()
+        except ModelNotResponding as exc:
+            print(ui.error(str(exc)))
+            return
+        finally:
+            if self._gp is not None:
+                self._gp.release()
+        if not changed:
+            print(ui.notice(f"nothing to compact yet (~{before:,} tokens; "
+                             "the recent exchanges are always kept verbatim)"))
+            return
+        # The agent's "compact" event already printed "before -> after".
+        self.sessions.save(self.session_id, self.cwd, self.agent.messages,
+                           self.state, self.config.model)
+
     def _context(self, arg: str) -> None:
         if not arg:
             print(ui.notice(f"context window: {self.config.num_ctx:,} tokens"))
@@ -1535,3 +1576,14 @@ class Repl:
                                    self.manager.reclaimable_vram_mb())
             print((ui.success if fits else ui.error)(f"context {value:,} — {why}"))
         self.agent = self._new_agent()
+
+
+def _phase_text(data: dict) -> str | None:
+    """Status-line text for an Agent `model_phase` event."""
+    phase = data.get("phase")
+    if phase == "reading":
+        tokens = data.get("tokens") or 0
+        return f"reading ~{tokens:,} tokens" if tokens else "reading prompt"
+    if phase in {"thinking", "writing"}:
+        return phase
+    return None

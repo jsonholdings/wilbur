@@ -171,4 +171,7 @@ def make_client(config: Any, model: str, ollama_cls: Any = OllamaClient) -> Any:
     client = ollama_cls(config.base_url, model, config.request_timeout)
     if getattr(config, "constrained_tool_calls", False):
         client.constrained_tool_calls = True
+    stall = getattr(config, "first_token_timeout_s", 0)
+    if stall and isinstance(client, OllamaClient):
+        client.stall_timeout = float(stall)
     return client

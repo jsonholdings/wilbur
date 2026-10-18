@@ -42,6 +42,12 @@ APPROVE = say("Checklist:\n- x: yes\n\nVERDICT: APPROVE")
 DENY = say("not quite right\n\nVERDICT: DENY")
 
 
+
+def _last_prompt(sent):
+    """The last message of a call, skipping the per-call harness briefing that
+    rides at the end since 2.38.0."""
+    return [m for m in sent if "[wilbur:briefing]" not in (m.get("content") or "")][-1]
+
 def _git(repo, *args):
     subprocess.run(["git", "-C", str(repo), *args], check=True,
                     capture_output=True, text=True)
@@ -243,7 +249,7 @@ def test_tests_green_before_the_coder_reprompt_then_fail_tester_no_red(repo, fak
     assert result.status == "tester_no_red"
     assert result.red_green == "no-red"
     assert [r for r, _ in result.role_seconds] == ["planner", "tester", "tester-retry"]
-    retry_prompt = client.seen[-1][-1]["content"]
+    retry_prompt = _last_prompt(client.seen[-1])["content"]
     assert "must fail against the current code" in retry_prompt
 
 
@@ -280,7 +286,7 @@ def test_tester_writes_nothing_reprompt_then_fail_tester_no_tests(repo, fake_cli
     result = _orch(repo).run("add x", branch="notests")
     assert result.status == "tester_no_tests"
     assert [r for r, _ in result.role_seconds] == ["planner", "tester", "tester-retry"]
-    assert "not written any test file" in client.seen[-1][-1]["content"]
+    assert "not written any test file" in _last_prompt(client.seen[-1])["content"]
     assert result.tester_calls == [
         {"role": "tester", "name": "list_files", "args": "path=.", "status": "ok"}]
 

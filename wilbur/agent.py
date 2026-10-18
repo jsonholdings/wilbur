@@ -10,6 +10,7 @@ from .config import Config
 from .context import CHARS_PER_TOKEN, estimate_tokens, compact
 from .fake_backend import make_client
 from .llm import OllamaClient, ToolCall
+from .llm import OllamaClient as _RealOllamaClient
 from .state import BRIEFING_MARKER, RunState
 from .tools import ToolContext, build_registry, to_schema
 from .tools.base import Approval
@@ -115,6 +116,10 @@ class Agent:
         if tool_names is not None:
             registry = {k: v for k, v in registry.items() if k in tool_names}
         self.registry = registry
+        if isinstance(self.client, _RealOllamaClient):
+            # Live phase for the status line while a streamed reply arrives.
+            self.client.on_progress = (
+                lambda phase, info: self.on_event("model_phase", {"phase": phase, **info}))
         self.schema = to_schema(registry)
         # The tool schema is sent with every call and counts against num_ctx.
         self._schema_tokens = int(len(json.dumps(self.schema, default=str)) / CHARS_PER_TOKEN)
@@ -170,11 +175,13 @@ class Agent:
                 final = "Paused: a command is waiting."
                 break
             self._maybe_compact()
-            self._refresh_briefing()
-            sent_estimate = self._estimate_prompt()
+            outgoing = self._outgoing()
+            sent_estimate = self._estimate_prompt() + (
+                estimate_tokens(outgoing[len(self.messages):]))
             started = time.time()
+            self.on_event("model_phase", {"phase": "reading", "tokens": sent_estimate})
             reply = self.client.chat(
-                self.messages,
+                outgoing,
                 self.schema,
                 known_tools=self.known,
                 num_ctx=self.config.num_ctx,
@@ -307,24 +314,47 @@ class Agent:
             return f"{header}\n\n{summary}\n\n{tail}"
         return f"{header} The task may need to be broken into smaller steps.\n\n{tail}"
 
-    def _refresh_briefing(self) -> None:
-        """Keep exactly one current briefing pinned directly after the system
-        prompt.
+    def _outgoing(self) -> list[dict[str, Any]]:
+        """The message list sent to the model: the stored transcript, then the
+        current harness briefing as the LAST message.
 
-        Replaced rather than appended: a stale copy further down the transcript
-        would contradict the live one, and the model has no way to tell which
-        is current.
+        The briefing used to be pinned right after the system prompt and
+        regenerated every turn. Ollama reuses its KV cache only for the prompt
+        prefix that is byte-identical to the previous call, so any change in
+        the briefing (a plan tick, a new failure) made it re-read the whole
+        history: 2026-10-17, two consecutive turns re-evaluated 48,813 and
+        49,402 tokens (~48 s each) where a cache hit costs ~200. It is also
+        not sent as a `system` message: Ollama collates every system message
+        into the single system block at the top of the rendered prompt, so a
+        system-role briefing at the end would still bust the prefix.
+
+        The briefing is never stored in `self.messages`, so the stored
+        transcript only ever grows at its tail between compactions.
         """
+        self._strip_stored_briefings()
         text = self.state.briefing()
-        head = 1 if self.messages and self.messages[0]["role"] == "system" else 0
-        self.messages = (
-            self.messages[:head]
-            + [m for m in self.messages[head:]
-               if not (m.get("role") == "system"
-                       and BRIEFING_MARKER in (m.get("content") or ""))]
-        )
-        if text:
-            self.messages.insert(head, {"role": "system", "content": text})
+        if not text:
+            return list(self.messages)
+        return self.messages + [{"role": "user", "content": text}]
+
+    def _strip_stored_briefings(self) -> None:
+        """Drop briefing copies a pre-2.38 session stored in the transcript
+        (pinned after the system prompt); the live one is added per call."""
+        if any(BRIEFING_MARKER in (m.get("content") or "") and m.get("role") == "system"
+               for m in self.messages[1:]):
+            self.messages = [self.messages[0]] + [
+                m for m in self.messages[1:]
+                if not (m.get("role") == "system"
+                        and BRIEFING_MARKER in (m.get("content") or ""))]
+
+    def compact_now(self) -> tuple[int, int, bool]:
+        """Compact on demand (the REPL's /compact). Returns (tokens before,
+        tokens after, whether anything changed)."""
+        before_msgs = len(self.messages)
+        before = self._prompt_size()
+        self._maybe_compact(force=True, reason="manual")
+        changed = len(self.messages) != before_msgs
+        return before, self._estimate_prompt(), changed
 
     def _verify_after_write(self) -> str | None:
         """Run the project's own check and record the verdict.
