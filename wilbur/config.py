@@ -72,6 +72,11 @@ class Config:
     # request_timeout. Covers model load + prompt reading before the first
     # token (~60 s for 64k tokens at 1,100 tok/s on this card).
     first_token_timeout_s: int = 120
+    # Ollama keep_alive sent on EVERY /api/chat request, so Wilbur's model stays resident between
+    # turns without any separate re-arm call (2.39.1: a bare /api/generate re-arm carried no
+    # options, so Ollama reloaded the model at its default context and the next chat reloaded it
+    # again at num_ctx). Exit still unloads with keep_alive 0.
+    ollama_keep_alive: str = "30m"
     # A `task` subagent runs synchronously inside one of the parent's tool
     # calls, so nothing else bounds its wall time: max_turns * request_timeout
     # is its theoretical ceiling (up to 10h) with zero visibility to the user
@@ -122,6 +127,30 @@ class Config:
     # a spinning run after this many consecutive turns with no progress.
     run_safety_max_minutes: int = 12 * 60
     stuck_limit: int = 5
+
+    # Long-task robustness (wilbur.agent, 2.40.0). An abliterated thinking model
+    # spends whole turns in `thinking` with empty `content`, reissues a failing
+    # call the ledger already flagged, or dumps a wall of prose with no action.
+    # Each knob bounds one of those so a long task keeps moving instead of
+    # retrying, spinning out, or returning a "mountain of text".
+    #
+    # Empty replies (nothing in `content`, no tool call): nudge up to this many
+    # times for a concrete answer or next action. On final give-up WITH
+    # `thinking` present, a short summary of the thinking is surfaced and the
+    # run is allowed to continue; truly empty (no thinking) stops the run.
+    empty_reply_retries: int = 2
+    # Tool-failure circuit breaker. After this many identical-signature
+    # failures the harness HARD-BLOCKS that exact call -- it is not executed
+    # again and a terminal result tells the model to change approach.
+    tool_failure_block_at: int = 3
+    # After this many consecutive failing tool calls with zero successful
+    # writes/progress between them, the run checkpoints and stops cleanly with
+    # a "stuck" summary instead of spinning to the round cap.
+    tool_failure_stop_at: int = 6
+    # Runaway output cap. A no-tool reply whose `content` exceeds this many
+    # chars for two turns running is truncated in the transcript and nudged for
+    # a concrete next action, so a wall of prose cannot recur every turn.
+    runaway_content_chars: int = 8000
     # Never accept "done" without evidence (wilbur.doneclaim): a completion
     # claim with plan items open, or "tests pass" with no test run, makes the
     # harness run the project's own check -- pass ticks the plan and stops as

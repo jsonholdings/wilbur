@@ -275,6 +275,9 @@ class OllamaClient:
         self.backoff_base = backoff_base
         self._sleep = sleep
         self.constrained_tool_calls = False  # opt-in: Config.constrained_tool_calls
+        # Sent on every /api/chat (Config.ollama_keep_alive): the chat request itself keeps the
+        # model resident, with the same options it was loaded with, so nothing else has to.
+        self.keep_alive: str = "30m"
         # Longest silence (no bytes at all) tolerated from the server before
         # ModelNotResponding: covers prompt reading before the first token,
         # and any gap between streamed chunks. Config.first_token_timeout_s.
@@ -390,6 +393,8 @@ class OllamaClient:
             "stream": True,
             "options": {"temperature": temperature, "top_p": top_p, "num_ctx": num_ctx},
         }
+        if self.keep_alive:
+            payload["keep_alive"] = self.keep_alive
         if tools:
             payload["tools"] = tools
         constrained = bool(self.constrained_tool_calls and tools)

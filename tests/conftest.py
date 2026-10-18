@@ -38,6 +38,9 @@ os.environ["WILBUR_CONFIG"] = str(_TEST_WILBUR_HOME / "config.json")
 os.environ["WILBUR_SESSIONS"] = str(_TEST_WILBUR_HOME / "sessions")
 os.environ["WILBUR_HISTORY"] = str(_TEST_WILBUR_HOME / "history")
 os.environ["WILBUR_USER_SKILLS_DIR"] = str(_TEST_WILBUR_HOME / "skills")
+# Per-process GPU holder marks: a live Wilbur on this machine must not make release() think
+# another holder is alive, and tests must never add or prune marks in the real dir.
+os.environ["WILBUR_GPU_HOLDERS_DIR"] = str(_TEST_WILBUR_HOME / "gpu-holders")
 # The owner's real sessions dir, computed independently of wilbur.config,
 # for the session-wide guard below.
 _REAL_SESSIONS_DIR = Path.home() / ".local" / "share" / "wilbur" / "sessions"

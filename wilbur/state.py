@@ -58,6 +58,9 @@ class RunState:
     # a run repeating the identical call registers as no progress.
     writes: int = 0
     last_tool: str = ""
+    # Circuit breaker (wilbur.agent 2.40.0): consecutive failing tool calls
+    # with no successful write/progress in between. Reset to 0 by any success.
+    consecutive_tool_failures: int = 0
 
     # -- plan -------------------------------------------------------------
     def set_plan(self, items: list[dict[str, Any]]) -> None:

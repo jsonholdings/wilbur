@@ -248,16 +248,36 @@ def test_quiet_after_tool_work_continues(monkeypatch, tmp_path, capsys):
     assert "Both files are written." in capsys.readouterr().out
 
 
-def test_two_empty_replies_stop_with_empty_reply(monkeypatch, tmp_path, capsys):
-    # The agent's one empty-reply retry also came back empty: keep-going stops
-    # and names the cause (stopped-state-is-visible spec item 3, 2026-10-16),
-    # instead of nudging on and later stopping under an unrelated reason.
-    replies = [_write("a.txt"), say(""), say(""), _write("b.txt")]
+def test_empty_replies_past_the_retries_stop_with_empty_reply(monkeypatch, tmp_path, capsys):
+    # The empty-reply retries (empty_reply_retries, default 2) are all spent and
+    # the reply is STILL empty with no reasoning to surface: keep-going stops and
+    # names the cause (stopped-state-is-visible spec item 3, 2026-10-16), instead
+    # of nudging on and later stopping under an unrelated reason. Three empties
+    # exhaust the two in-turn nudges.
+    replies = [_write("a.txt"), say(""), say(""), say(""), _write("b.txt")]
     repl, _ = _run(monkeypatch, tmp_path, replies, lines=("create a.txt and b.txt",))
     out = capsys.readouterr().out
     assert "continuing" not in out and not (tmp_path / "b.txt").exists()
-    assert "two empty replies" in out and "STOPPED \u2014 empty_reply" in out
+    assert "repeated empty replies" in out and "STOPPED \u2014 empty_reply" in out
     assert repl._stop_reason == "empty_reply"
+
+
+def test_long_task_recovers_from_a_mid_task_empty_reply_and_completes(
+        monkeypatch, tmp_path, capsys):
+    # Long-task robustness (2.40.0): a multi-round task that goes empty in the
+    # middle of a keep-going continuation is nudged, recovers, and runs to
+    # completion -- the empty-reply guard must never hard-stop a task that is
+    # still making progress.
+    replies = [
+        _write("a.txt"), say("a.txt done. Next, I'll create b.txt."),   # run 1 -> continue
+        say(""), _write("b.txt"), say("b.txt done. Next, I'll create c.txt."),  # run 2: empty, nudged
+        _write("c.txt"), say("All three files are written."),           # run 3: done
+    ]
+    _run(monkeypatch, tmp_path, replies, lines=("create a.txt, b.txt and c.txt",))
+    out = capsys.readouterr().out
+    assert all((tmp_path / f"{n}.txt").exists() for n in "abc"), \
+        "the task did not run to completion after the mid-task empty reply"
+    assert "All three files are written." in out
 
 
 def test_asking_leave_to_carry_on_continues(monkeypatch, tmp_path, capsys):

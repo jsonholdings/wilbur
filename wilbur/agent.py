@@ -78,6 +78,33 @@ finishing. Without calling any tools, answer in three short parts:
 
 Keep it brief."""
 
+# Firmer than the old one-line prod: an abliterated thinking model puts its
+# whole answer in the reasoning channel and leaves `content` empty. Tell it
+# plainly where the answer has to go.
+EMPTY_REPLY_NUDGE = (
+    "Your last reply was empty -- your answer went into the reasoning channel, "
+    "not into the message. Put your answer in the message content, not the "
+    "reasoning. Either call a tool to take the next concrete action, or state "
+    "plainly in the content what you did, what is left, and the next step. Do "
+    "not reply with an empty message.")
+
+# A no-tool wall of prose two turns running: stop narrating and act.
+RUNAWAY_NUDGE = (
+    "That reply was a long block of text with no action taken. Stop explaining "
+    "and do the next concrete thing: call a tool now, or give a two-line status "
+    "(what is done, what is next). Do not repeat the explanation.")
+
+# When the empty-reply retries are spent but the model did put something in the
+# reasoning channel, surface a short summary of it rather than the whole wall.
+_THINKING_SUMMARY_CHARS = 1500
+
+
+def _truncate_reasoning(thinking: str, limit: int = _THINKING_SUMMARY_CHARS) -> str:
+    thinking = thinking.strip()
+    if len(thinking) <= limit:
+        return thinking
+    return thinking[:limit].rstrip() + "\n\n... (reasoning truncated)"
+
 
 class Agent:
     def __init__(
@@ -138,6 +165,14 @@ class Agent:
         # wilbur.inbox.Inbox (set by the REPL): a message typed mid-turn is
         # read between rounds instead of only when the whole turn ends.
         self.inbox = None
+        # Runaway-output cap (2.40.0): a no-tool reply over the char cap two
+        # turns running is truncated + nudged. The streak persists across
+        # run() calls because keep-going drives the "every turn" recurrence.
+        self._big_content_streak = 0
+        # Tool-failure circuit breaker (2.40.0): set True when a run stops
+        # because consecutive tool failures hit tool_failure_stop_at, so the
+        # REPL names that cause rather than letting keep-going nudge on.
+        self.tool_circuit_tripped = False
         system = SYSTEM_PROMPT + (f"\n\n{system_extra}" if system_extra else "")
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
 
@@ -156,6 +191,7 @@ class Agent:
         # (2026-10-16: a run stopped after two empty replies and the log said
         # "horizon reached", hiding the real cause).
         self.last_reply_empty = False
+        self.tool_circuit_tripped = False
         # One compact-and-retry per run for an empty reply that came back with
         # the window full: a context-full reply is not an empty reply.
         context_full_retried = False
@@ -218,31 +254,65 @@ class Agent:
                 continue
 
             if not reply.tool_calls:
-                # Stall (b), diagnosed 2026-10-02: a thinking-capable local
-                # model (qwen3) sometimes returns a message with everything in
-                # `thinking` and an EMPTY `content` and no tool calls. The old
-                # loop broke here with final="" -- a turn that ended with no
-                # reply at all and nothing for keep-going to act on, so the
-                # session just went silent. Nudge once for a concrete answer or
-                # next action before giving up; if it is still empty, surface
-                # the thinking rather than nothing.
-                if not (reply.content or "").strip() and empty_retries < 1:
-                    empty_retries += 1
-                    self.on_event("empty_reply", {"had_thinking": bool(reply.thinking)})
-                    self.messages.append({
-                        "role": "user",
-                        "content": ("Your last reply was empty. Either take the next "
-                                    "concrete action with a tool, or state plainly what "
-                                    "you did, what is left, and the next step. Do not "
-                                    "reply with an empty message."),
-                    })
-                    continue
-                if not (reply.content or "").strip() and empty_retries >= 1:
-                    self.last_reply_empty = True
-                final = reply.content or (reply.thinking or "").strip()
+                content = reply.content or ""
+                # (1) EMPTY REPLY -- stall (b), diagnosed 2026-10-02: a
+                # thinking-capable local model (qwen3) returns everything in
+                # `thinking` with an EMPTY `content` and no tool calls. Nudge up
+                # to empty_reply_retries times for a concrete answer or action.
+                # The counter resets on any non-empty/tool reply (below), so it
+                # is bounded and an always-empty model still terminates here.
+                if not content.strip():
+                    self._big_content_streak = 0
+                    if empty_retries < max(0, self.config.empty_reply_retries):
+                        empty_retries += 1
+                        self.on_event("empty_reply", {
+                            "had_thinking": bool(reply.thinking),
+                            "attempt": empty_retries})
+                        self.messages.append(
+                            {"role": "user", "content": EMPTY_REPLY_NUDGE})
+                        continue
+                    # Retries spent. If the model DID reason, surface a short
+                    # summary (not the whole wall) and let keep-going carry the
+                    # task on -- do NOT hard-stop a run that is still working.
+                    # Only a truly empty reply (no thinking) stops the run.
+                    thinking = (reply.thinking or "").strip()
+                    if thinking:
+                        final = (_truncate_reasoning(thinking) +
+                                 "\n\n(summary of reasoning; no answer was put in "
+                                 "the message)")
+                        self.on_event("empty_reply_recovered", {"chars": len(thinking)})
+                    else:
+                        self.last_reply_empty = True
+                        final = ""
+                    break
+
+                # (3) RUNAWAY OUTPUT: a no-tool wall of prose two turns running.
+                # The streak persists across run() calls (keep-going drives the
+                # recurrence). Truncate the transcript copy and nudge for action
+                # so the "mountain of text" cannot repeat every turn.
+                cap = max(0, int(self.config.runaway_content_chars))
+                if cap and len(content) > cap:
+                    self._big_content_streak += 1
+                    if self._big_content_streak >= 2:
+                        self.messages[-1]["content"] = (
+                            content[:cap].rstrip() +
+                            "\n\n... (output truncated by harness: too long, no action taken)")
+                        self.on_event("runaway_output", {
+                            "chars": len(content), "streak": self._big_content_streak})
+                        self.messages.append(
+                            {"role": "user", "content": RUNAWAY_NUDGE})
+                        empty_retries = 0
+                        continue
+                    final = content
+                    break
+
+                # A normal plain reply ends the turn.
+                self._big_content_streak = 0
+                final = content
                 break
 
             empty_retries = 0
+            self._big_content_streak = 0
             cancelled_mid_round = False
             for call in reply.tool_calls:
                 if self.cancel_event.is_set():
@@ -257,6 +327,17 @@ class Agent:
             if cancelled_mid_round:
                 final = "Cancelled by user."
                 self.on_event("cancelled", {})
+                break
+
+            # (2) CIRCUIT BREAKER: too many consecutive failing tool calls with
+            # no successful write/progress between them. Checkpoint and stop
+            # cleanly with a useful summary instead of spinning to the round cap.
+            if (self.state.consecutive_tool_failures
+                    >= max(1, self.config.tool_failure_stop_at)):
+                self.tool_circuit_tripped = True
+                final = self._stuck_tool_summary()
+                self.on_event("tool_circuit_stop", {
+                    "failures": self.state.consecutive_tool_failures})
                 break
         else:
             final = self._limit_summary()
@@ -313,6 +394,20 @@ class Agent:
         if summary:
             return f"{header}\n\n{summary}\n\n{tail}"
         return f"{header} The task may need to be broken into smaller steps.\n\n{tail}"
+
+    def _stuck_tool_summary(self) -> str:
+        """The clean stop when the circuit breaker trips: say how many calls
+        failed in a row, the last error, and a concrete next step, instead of
+        spinning silently to the round cap."""
+        n = self.state.consecutive_tool_failures
+        last = self.state.failures[-1] if self.state.failures else None
+        why = f" last error: {last.why}" if last else ""
+        what = f" (last call: {last.what})" if last else ""
+        return (f"stuck: {n} tool calls failed in a row with no progress"
+                f"{what}.{why}\n\nNext step: change the tool, the arguments, or "
+                "the approach -- the same call will not start working on another "
+                'retry. Type "/continue" to resume with a fresh budget once you '
+                "have a different plan.")
 
     def _outgoing(self) -> list[dict[str, Any]]:
         """The message list sent to the model: the stored transcript, then the
@@ -407,10 +502,23 @@ class Agent:
 
     def _execute(self, call: ToolCall) -> str:
         tool = self.registry.get(call.name)
+        signature = f"{call.name}({self._arg_signature(call)})"
         if tool is None:
             available = ", ".join(sorted(self.known))
             self.on_event("tool_error", {"name": call.name})
+            self.state.consecutive_tool_failures += 1
             return f"No tool named {call.name!r}. Available tools: {available}"
+
+        # CIRCUIT BREAKER (2.40.0): once this exact call has failed
+        # tool_failure_block_at times, hard-block it -- do NOT run it again.
+        # A local model otherwise reissues the identical failing call forever.
+        block_at = max(1, int(getattr(self.config, "tool_failure_block_at", 3)))
+        if self.state.repeated(signature) >= block_at:
+            self.state.consecutive_tool_failures += 1
+            self.on_event("tool_blocked", {"name": call.name, "signature": signature})
+            return ("[harness] blocked: this exact call failed "
+                    f"{block_at} times; it will not run again -- change the tool, "
+                    "arguments, or approach.")
 
         self.on_event("tool_start", {
             "name": call.name, "args": call.arguments, "recovered": call.recovered,
@@ -424,12 +532,16 @@ class Agent:
             self.on_event("tool_end", {"name": call.name, "error": True,
                                        "output": result_text,
                                        "seconds": time.time() - started})
+            self.state.record_failure(signature, result_text)
+            self.state.consecutive_tool_failures += 1
             return result_text
         except Exception as exc:  # a tool crash must not kill the session
             result_text = f"{call.name} raised {type(exc).__name__}: {exc}"
             self.on_event("tool_end", {"name": call.name, "error": True,
                                        "output": result_text,
                                        "seconds": time.time() - started})
+            self.state.record_failure(signature, result_text)
+            self.state.consecutive_tool_failures += 1
             return result_text
 
         self.on_event("tool_end", {
@@ -449,8 +561,8 @@ class Agent:
         # otherwise reissue the identical call; the ledger lets the next
         # briefing say so instead of watching it happen again.
         if result.is_error:
-            signature = f"{call.name}({self._arg_signature(call)})"
             self.state.record_failure(signature, result.output)
+            self.state.consecutive_tool_failures += 1
             n = self.state.repeated(signature)
             if n > 1:
                 return (result.output +
@@ -458,8 +570,10 @@ class Agent:
                         f"failed every time. Change the approach rather than retrying.")
             return result.output
 
-        # Progress signals for the stuck detector (wilbur.horizon).
-        self.state.last_tool = f"{call.name}({self._arg_signature(call)})"
+        # A successful tool call is real progress: reset the consecutive-failure
+        # circuit-breaker counter and the stuck signals (wilbur.horizon).
+        self.state.consecutive_tool_failures = 0
+        self.state.last_tool = signature
         if call.name in WRITE_TOOLS:
             self.state.writes += 1
 

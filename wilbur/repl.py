@@ -914,11 +914,18 @@ class Repl:
                 # theirs wins over the nudge
                 return stop(runstate.USER_INTERRUPT, reply)
             if getattr(self.agent, "last_reply_empty", False):
-                # The agent's one empty-reply retry also came back empty:
-                # name the real cause, not whatever check would fire next.
-                print(ui.notice("keep going: two empty replies in a row -- stopping"))
-                self._log_progress("stopped", "empty_reply: two empty replies")
+                # The agent's empty-reply retries also came back empty with no
+                # reasoning to surface: name the real cause, not whatever check
+                # would fire next.
+                print(ui.notice("keep going: repeated empty replies -- stopping"))
+                self._log_progress("stopped", "empty_reply: repeated empty replies")
                 return stop(runstate.EMPTY_REPLY, reply)
+            if getattr(self.agent, "tool_circuit_tripped", False):
+                # Too many consecutive tool failures: stop cleanly with the
+                # summary rather than nudging on into more failing calls.
+                print(ui.notice("keep going: tool-failure circuit breaker -- stopping"))
+                self._log_progress("stopped", "tool circuit breaker: consecutive failures")
+                return stop(runstate.STUCK, reply)
 
             if self._turn_hit_limit:
                 # The round cap: checkpoint + carry on, not a stop.
