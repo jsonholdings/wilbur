@@ -3,6 +3,10 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.37.5
+- Compaction triggers on the real prompt size. `_maybe_compact` now uses the larger of the chars/token estimate and the prompt_tokens Ollama reported for the last call plus the estimate of what was added since, and the estimate counts the tool schema sent with every call. A long session whose estimate (45,004) sat just under the 45,056 budget while the real prompt was 64,582 of 65,536 never compacted and stopped with `empty_reply`.
+- An empty reply that comes back with the window full (prompt_tokens within `reserve_output` of `num_ctx`) is compacted and retried once instead of counting toward the empty-reply stop (tests in tests/test_compact_real_prompt.py).
+
 ## 2.37.4
 - Session save writes through a per-writer tmp file (pid and thread in the name) and removes it when the write or rename fails, so two saves of one session cannot interleave bytes and a failed save leaves no stray `.tmp` (tests in tests/test_session.py).
 - RUNBOOK.md (private build): what runs where, start/stop, publish and the owner's local update (editable install), rollback, recovery and health checks.

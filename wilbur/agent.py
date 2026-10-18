@@ -7,7 +7,7 @@ import time
 from typing import Any, Callable
 
 from .config import Config
-from .context import estimate_tokens, compact
+from .context import CHARS_PER_TOKEN, estimate_tokens, compact
 from .fake_backend import make_client
 from .llm import OllamaClient, ToolCall
 from .state import BRIEFING_MARKER, RunState
@@ -116,6 +116,15 @@ class Agent:
             registry = {k: v for k, v in registry.items() if k in tool_names}
         self.registry = registry
         self.schema = to_schema(registry)
+        # The tool schema is sent with every call and counts against num_ctx.
+        self._schema_tokens = int(len(json.dumps(self.schema, default=str)) / CHARS_PER_TOKEN)
+        # The real prompt size Ollama reported for the last call, and our own
+        # estimate of what was sent then. The chars/token estimate runs far
+        # low on high-entropy tool output (2026-10-17: estimate 45,004 vs a
+        # real 64,582 of 65,536, so it never compacted and the model ran out
+        # of room and returned empty replies). 0 = no real figure yet.
+        self._last_prompt_tokens = 0
+        self._estimate_at_last_prompt = 0
         self.known = set(registry)
         self.state = state if state is not None else RunState()
         self.ctx = ToolContext(cwd=cwd, config=config, read_files={}, approve=approve)
@@ -142,6 +151,9 @@ class Agent:
         # (2026-10-16: a run stopped after two empty replies and the log said
         # "horizon reached", hiding the real cause).
         self.last_reply_empty = False
+        # One compact-and-retry per run for an empty reply that came back with
+        # the window full: a context-full reply is not an empty reply.
+        context_full_retried = False
         # Test commands run in this call (the model's or the harness's own):
         # the claims guard (wilbur.doneclaim) reads it.
         self.turn_test_runs = 0
@@ -159,6 +171,7 @@ class Agent:
                 break
             self._maybe_compact()
             self._refresh_briefing()
+            sent_estimate = self._estimate_prompt()
             started = time.time()
             reply = self.client.chat(
                 self.messages,
@@ -169,6 +182,9 @@ class Agent:
                 top_p=self.config.top_p,
             )
             elapsed = time.time() - started
+            if reply.prompt_tokens:
+                self._last_prompt_tokens = reply.prompt_tokens
+                self._estimate_at_last_prompt = sent_estimate
             self.on_event("assistant", {
                 "content": reply.content, "thinking": reply.thinking,
                 "tokens": reply.eval_tokens, "seconds": elapsed,
@@ -182,6 +198,17 @@ class Agent:
                 ]
             self.messages.append(assistant)
             self.on_event("message", {})
+
+            if (not reply.tool_calls and not (reply.content or "").strip()
+                    and not context_full_retried
+                    and reply.prompt_tokens >= self.config.num_ctx - self.config.reserve_output):
+                # The window was full: the model had no room left to answer
+                # and spent it thinking. Compact and ask again rather than
+                # counting it toward the empty-reply stop.
+                context_full_retried = True
+                self.messages.pop()
+                self._maybe_compact(force=True, reason="context_full")
+                continue
 
             if not reply.tool_calls:
                 # Stall (b), diagnosed 2026-10-02: a thinking-capable local
@@ -432,14 +459,31 @@ class Agent:
                 return f"{key}={str(args[key])[:80]}"
         return ",".join(sorted(args))[:80]
 
-    def _maybe_compact(self) -> None:
+    def _estimate_prompt(self) -> int:
+        """Estimated prompt size: the messages plus the tool schema."""
+        return estimate_tokens(self.messages) + self._schema_tokens
+
+    def _prompt_size(self) -> int:
+        """Best figure for the next prompt: the larger of our estimate and the
+        real size Ollama last reported plus what has been added since."""
+        estimate = self._estimate_prompt()
+        if not self._last_prompt_tokens:
+            return estimate
+        added = max(0, estimate - self._estimate_at_last_prompt)
+        return max(estimate, self._last_prompt_tokens + added)
+
+    def _maybe_compact(self, force: bool = False, reason: str = "budget") -> None:
         budget = int(self.config.num_ctx * self.config.compact_at) - self.config.reserve_output
-        used = estimate_tokens(self.messages)
-        if used < budget:
+        used = self._prompt_size()
+        if used < budget and not force:
             return
         before = len(self.messages)
         self.messages = compact(self.messages, self.client, self.config)
+        # The last real figure describes the old history; start over.
+        self._last_prompt_tokens = 0
+        self._estimate_at_last_prompt = 0
         self.on_event("compact", {
             "before_messages": before, "after_messages": len(self.messages),
-            "before_tokens": used, "after_tokens": estimate_tokens(self.messages),
+            "before_tokens": used, "after_tokens": self._estimate_prompt(),
+            "reason": reason,
         })
