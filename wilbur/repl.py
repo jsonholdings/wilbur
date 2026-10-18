@@ -730,6 +730,8 @@ class Repl:
             self._start_inbox_watch()
             return self._run_loop()
         finally:
+            if getattr(self, "_gp", None) is not None:
+                self._gp.end_session()  # hand the GPU back and unload the model only at exit
             if titled:
                 sys.stdout.write(runstate.restore_title())
                 sys.stdout.flush()
@@ -747,6 +749,8 @@ class Repl:
         print(ui.banner(self.config.model, self.cwd, self.config.num_ctx))
         if not fake:
             self._warn_if_unsuitable(self.config.model)
+        if self._gp is not None:
+            self._begin_gpu_session()
         if self._use_ptk:
             self._start_ptk_pump()
         else:
@@ -841,7 +845,7 @@ class Repl:
                 self._turn_active.clear()
                 self._spinner = None
                 if self._gp is not None:
-                    self._gp.release()  # idle between turns: hand the GPU back
+                    self._gp.release()  # no-op in a session hold: the GPU stays Wilbur's until exit
             # Save after every exchange, not at exit. A session that only
             # persists on a clean quit is exactly the session you lose.
             self.sessions.save(self.session_id, self.cwd, self.agent.messages,
@@ -1213,6 +1217,20 @@ class Repl:
         return None
 
     # ---------------------------------------------------------------- #
+
+    def _begin_gpu_session(self) -> None:
+        """Hold gpu-queue wait mode for the whole session (owner 2026-10-18): no other GPU job
+        is admitted until this session exits, and Wilbur's model is kept loaded meanwhile."""
+        keeper = _gpu_priority.ModelKeeper(
+            self.config.base_url, lambda: self.config.model,
+            own_models_fn=lambda: {getattr(self.config, k, "") for k in ("subagent_model", "reviewer_model")})
+        grant = self._gp.begin_session(reason="wilbur session", keeper=keeper)
+        if grant.absent:
+            print(ui.notice("gpu-queue not reachable: exclusive GPU is NOT held this session; "
+                            "other GPU jobs may run alongside Wilbur."))
+        elif not grant.granted:
+            print(ui.notice(_gpu_priority.describe_wait(
+                grant, override_hint="nothing new will start; type /override to stop it now")))
 
     def _gpu_gate(self, line: str) -> bool:
         """Ask gpu-queue for priority before inference. False = turn parked."""
