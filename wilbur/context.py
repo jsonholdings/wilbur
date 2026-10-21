@@ -66,7 +66,11 @@ def compact(messages: list[dict[str, Any]], client, config) -> list[dict[str, An
         return messages
 
     keep_recent = _recent_slice(body, config)
-    to_summarise = body[: len(body) - len(keep_recent)]
+    # Old harness briefings are never summarised (paraphrase drift); they are
+    # dropped, and the agent re-appends the current one on the next call.
+    to_summarise = [m for m in body[: len(body) - len(keep_recent)]
+                    if not (m.get("role") == "user"
+                            and BRIEFING_MARKER in (m.get("content") or ""))]
     if not to_summarise:
         return messages
 

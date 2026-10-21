@@ -410,27 +410,36 @@ class Agent:
                 "have a different plan.")
 
     def _outgoing(self) -> list[dict[str, Any]]:
-        """The message list sent to the model: the stored transcript, then the
-        current harness briefing as the LAST message.
+        """The message list sent to the model: the stored transcript, with the
+        current harness briefing appended to it as a user-role note whenever
+        its text differs from the last briefing in the transcript.
 
-        The briefing used to be pinned right after the system prompt and
-        regenerated every turn. Ollama reuses its KV cache only for the prompt
-        prefix that is byte-identical to the previous call, so any change in
-        the briefing (a plan tick, a new failure) made it re-read the whole
-        history: 2026-10-17, two consecutive turns re-evaluated 48,813 and
-        49,402 tokens (~48 s each) where a cache hit costs ~200. It is also
-        not sent as a `system` message: Ollama collates every system message
-        into the single system block at the top of the rendered prompt, so a
-        system-role briefing at the end would still bust the prefix.
+        Ollama reuses its KV cache only for the prompt prefix byte-identical
+        to the previous call (2026-10-17: a briefing pinned after the system
+        prompt made two turns re-read 48,813 and 49,402 tokens). 2.38.0 moved
+        it to the tail but removed and re-sent it each call, so every prompt
+        diverged at the old briefing's start. A hybrid/recurrent model
+        (qwen35) resumes only from a context checkpoint, and llama.cpp makes
+        those only near the end of each prompt (n_tokens-513, n_tokens-1);
+        a briefing over ~512 tokens put both past the divergence, so
+        2026-10-20 33 of ~50 big-context calls re-read 36-41k tokens (34-40 s).
 
-        The briefing is never stored in `self.messages`, so the stored
-        transcript only ever grows at its tail between compactions.
+        Since 2.40.1 briefings are stored and never removed or edited between
+        compactions, so each call's list extends the previous call's list
+        exactly. It is not a `system` message: Ollama collates system
+        messages into the top block, which would bust the prefix.
         """
         self._strip_stored_briefings()
         text = self.state.briefing()
-        if not text:
-            return list(self.messages)
-        return self.messages + [{"role": "user", "content": text}]
+        if text and text != self._last_stored_briefing():
+            self.messages.append({"role": "user", "content": text})
+        return list(self.messages)
+
+    def _last_stored_briefing(self) -> str | None:
+        for m in reversed(self.messages):
+            if m.get("role") == "user" and BRIEFING_MARKER in (m.get("content") or ""):
+                return m.get("content")
+        return None
 
     def _strip_stored_briefings(self) -> None:
         """Drop briefing copies a pre-2.38 session stored in the transcript

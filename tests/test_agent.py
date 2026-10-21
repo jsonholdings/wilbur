@@ -166,9 +166,10 @@ def test_turn_limit_asks_for_a_summary_without_touching_the_transcript(make_agen
     # call is never appended to the transcript.
     assert len(client.seen) == 4
     assert client.seen[-1][-1]["content"].startswith("You have used up the tool-round budget")
-    # user turn + 3 x (assistant + tool result); no summary turn added. The
-    # briefing rides on each outgoing call and is never stored (2.38.0).
-    assert len(a.messages) == before + 7
+    # user turn + 3 x (assistant + tool result); no summary turn added. Stored
+    # briefings (appended when they change, 2.40.1) are not counted.
+    real = [m for m in a.messages if "[wilbur:briefing]" not in (m.get("content") or "")]
+    assert len(real) == before + 7
     assert a.messages[-1]["role"] == "tool"
 
 
@@ -234,25 +235,25 @@ def test_objective_is_captured_verbatim_and_pinned_every_turn(make_agent):
     assert a.state.objective == "RENAME the widget to gadget, exactly"
     for sent in client.seen:
         pinned = [m for m in sent if "[wilbur:briefing]" in (m.get("content") or "")]
-        assert len(pinned) == 1, "briefing missing or duplicated on a turn"
-        assert "RENAME the widget to gadget, exactly" in pinned[0]["content"]
-        # Last, and not a system message: Ollama collates every system message
-        # into the top block, which would bust the prompt-prefix cache.
-        assert sent[-1] is pinned[0], "briefing must be the last message sent"
-        assert pinned[0]["role"] != "system"
+        assert pinned, "briefing missing on a turn"
+        assert "RENAME the widget to gadget, exactly" in pinned[-1]["content"]
+        # Not a system message: Ollama collates every system message into the
+        # top block, which would bust the prompt-prefix cache.
+        assert all(m["role"] != "system" for m in pinned)
 
 
-def test_briefing_is_replaced_not_appended(make_agent):
-    """A stale copy further down would contradict the live one and the model
-    has no way to tell which is current."""
+def test_briefing_is_appended_only_when_it_changes(make_agent):
+    """2.40.1: briefings are stored append-only (prompt-prefix cache), but an
+    unchanged one is never added again, and the newest is the latest copy."""
     a, client = make_agent([Reply(content="", tool_calls=[call("read_file", path="a.txt")]),
                             Reply(content="", tool_calls=[call("read_file", path="a.txt")]),
                             say("ok")])
     a.run("do the thing")
     for sent in client.seen:
-        briefings = [m for m in sent if "[wilbur:briefing]" in (m.get("content") or "")]
-        assert len(briefings) == 1
-    assert not [m for m in a.messages if "[wilbur:briefing]" in (m.get("content") or "")]
+        texts = [m["content"] for m in sent if "[wilbur:briefing]" in (m.get("content") or "")]
+        assert texts and len(texts) == len(set(texts))
+    stored = [m for m in a.messages if "[wilbur:briefing]" in (m.get("content") or "")]
+    assert stored[-1]["content"] == a.state.briefing()
 
 
 def test_a_failed_tool_call_enters_the_ledger(make_agent):
