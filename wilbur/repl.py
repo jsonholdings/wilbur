@@ -514,9 +514,10 @@ class Repl:
                 status += f"  {agents}"
             lines.append(ui.c(status, ui.ACCENT))
         s = self.stats
-        bar = (f"model: {self.config.model}  ·  tokens: {s['in_tokens']:,} in / "
-               f"{s['out_tokens']:,} out  ·  {self._agents_status_line() or 'idle'}")
-        lines.append(ui.c(bar, ui.GREY))
+        lines.append(ui.status_bar(
+            self.config.model, s.get("last_prompt_tokens", 0), self.config.num_ctx,
+            s["in_tokens"], s["out_tokens"], s["seconds"],
+            self._agents_status_line() or "idle"))
         return ANSI("\n".join(lines))
 
     # ---------------------------------------------------------------- #
@@ -610,8 +611,17 @@ class Repl:
                 summary = json.dumps(args)[:60]
             print(ui.tool_call(data["name"], str(summary)[:70], data.get("recovered")))
         elif kind == "tool_end":
-            print(ui.tool_result(data.get("output", ""), data.get("error", False),
-                                  seconds=data.get("seconds")))
+            diff = data.get("diff")
+            if diff and not data.get("error"):
+                from . import render
+                print(render.diff_view(diff["path"], diff["old"], diff["new"],
+                                       start=diff.get("start", 1),
+                                       created=diff.get("created", False)))
+            else:
+                print(ui.tool_result(data.get("output", ""), data.get("error", False),
+                                      seconds=data.get("seconds"),
+                                      path=(data.get("args") or {}).get("path")
+                                      if data.get("name") == "read_file" else None))
         elif kind == "model_phase":
             spinner = getattr(self, "_spinner", None)
             if spinner is not None:

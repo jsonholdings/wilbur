@@ -118,11 +118,14 @@ class WriteFile:
         outcome = ctx.approve("write_file", f"write {len(content)} bytes to {path}")
         if outcome is not Approval.GRANTED:
             return ToolResult(denial_message("write", outcome), is_error=True)
+        before = path.read_text(errors="replace") if existed else ""
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
         ctx.read_files[str(path)] = path.stat().st_mtime
         verb = "Updated" if existed else "Created"
-        return ToolResult(f"{verb} {path} ({len(content.splitlines())} lines).")
+        return ToolResult(f"{verb} {path} ({len(content.splitlines())} lines).",
+                          diff={"path": args["path"], "old": before, "new": content,
+                                "start": 1, "created": not existed})
 
 
 class EditFile:
@@ -181,8 +184,20 @@ class EditFile:
         updated = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
         path.write_text(updated)
         ctx.read_files[str(path)] = path.stat().st_mtime
+        # The diff shown to the user: the first replacement, with its real
+        # line numbers and a little surrounding file for context.
+        at = text.find(old)
+        line_start = text.rfind("\n", 0, at) + 1
+        line_end = text.find("\n", at + len(old))
+        line_end = len(text) if line_end == -1 else line_end
+        before_region = text[line_start:line_end]
+        after_region = before_region.replace(old, new, 1)
         return ToolResult(f"Edited {path} ({count if args.get('replace_all') else 1} "
-                          f"replacement{'s' if args.get('replace_all') and count > 1 else ''}).")
+                          f"replacement{'s' if args.get('replace_all') and count > 1 else ''}).",
+                          diff={"path": args["path"], "old": before_region,
+                                "new": after_region,
+                                "start": text.count("\n", 0, line_start) + 1,
+                                "created": False})
 
 
 def _near_miss_hint(text: str, old: str) -> str:

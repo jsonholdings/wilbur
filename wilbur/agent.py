@@ -578,6 +578,8 @@ class Agent:
             "name": call.name, "error": result.is_error,
             "output": result.display or result.output,
             "seconds": time.time() - started,
+            # Display-only: the REPL draws a diff / highlights a file view.
+            "diff": result.diff, "args": call.arguments or {},
         })
 
         if call.name == "run_tests":

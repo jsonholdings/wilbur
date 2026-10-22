@@ -11,6 +11,7 @@ import shutil
 import sys
 import threading
 import time
+import unicodedata
 
 from .art import wordmark
 
@@ -26,6 +27,11 @@ RESET = "\033[0m"
 BULLET = "⏺"            # round tool-call marker
 BRANCH = "⎿"            # result continuation
 SPINNER = "✻✽✹✽"
+# The welcome box needs a marker whose cell width every terminal agrees on.
+# BULLET (U+23FA) is an emoji in some terminals (COSMIC draws it as a 2-cell
+# orange circle) and text in others, so a box padded for either width breaks
+# on the other (owner screenshot 2026-10-21 23:17: the right border jutted out).
+BOX_MARK = "●"
 
 _NO_COLOR = bool(os.environ.get("NO_COLOR")) or not sys.stdout.isatty()
 
@@ -51,7 +57,7 @@ def banner(model: str, cwd: str, ctx: int, speed: str = "") -> str:
     art = wordmark(w - 2, colour=not _NO_COLOR)
     inner = w - 4
     lines = [
-        c(f"{BULLET} Wilbur", ACCENT, BOLD) + c(f" v{__version__}", GREY)
+        c(f"{BOX_MARK} Wilbur", ACCENT, BOLD) + c(f" v{__version__}", GREY)
         + c("  local coding agent", GREY),
         "",
         c("model  ", GREY) + model + (c(f"  ({speed})", GREY) if speed else ""),
@@ -69,18 +75,39 @@ def banner(model: str, cwd: str, ctx: int, speed: str = "") -> str:
     return f"\n{art_block}\n\n{top}\n{body}\n{bot}\n{hint}\n"
 
 
-def _ansi_pad(text: str) -> int:
-    """Extra ljust width to compensate for non-printing escape sequences."""
-    visible, i, n = 0, 0, len(text)
+def _cell_width(ch: str) -> int:
+    """Terminal cells one character occupies: 0 for combining and format
+    marks, 2 for East Asian wide or full-width (CJK, most emoji), else 1."""
+    if unicodedata.combining(ch) or unicodedata.category(ch) in ("Mn", "Me", "Cf"):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def visible_width(text: str) -> int:
+    """Display width of `text` in terminal cells, ignoring ANSI escapes."""
+    cells, i, n = 0, 0, len(text)
     while i < n:
-        if text[i] == "\033":
+        if text.startswith("\033]", i):
+            # OSC (e.g. an OSC 8 hyperlink): runs to ST (ESC \) or BEL and
+            # takes no cells; skipping to the next "m" would eat the URL text.
+            st, bel = text.find("\033\\", i + 2), text.find("\a", i + 2)
+            ends = [e + (2 if e == st else 1) for e in (st, bel) if e != -1]
+            i = min(ends) if ends else n
+        elif text[i] == "\033":
             while i < n and text[i] != "m":
                 i += 1
             i += 1
         else:
-            visible += 1
+            cells += _cell_width(text[i])
             i += 1
-    return len(text) - visible
+    return cells
+
+
+def _ansi_pad(text: str) -> int:
+    """Extra ljust width so `text` fills its cells: ljust counts code points,
+    so subtract the cells the text really takes (escapes count 0, wide
+    characters 2, combining marks 0)."""
+    return len(text) - visible_width(text)
 
 
 def _shorten(text: str, limit: int) -> str:
@@ -93,21 +120,44 @@ def tool_call(name: str, summary: str, recovered: bool = False) -> str:
 
 
 def tool_result(output: str, error: bool = False, max_lines: int = 6,
-                 seconds: float | None = None) -> str:
-    lines = output.strip().splitlines() or ["(no output)"]
-    shown = lines[:max_lines]
+                 seconds: float | None = None, path: str | None = None) -> str:
+    """`path` set (a read_file view) highlights the shown lines by language."""
+    lines = output.strip("\n").splitlines() or ["(no output)"]
+    if not path:
+        lines = output.strip().splitlines() or ["(no output)"]
+    shown = [line[:width() - 6] for line in lines[:max_lines]]
     colour = RED if error else GREY
+    if path and not error:
+        from .render import file_view_lines
+        styled = file_view_lines(shown, path)
+    else:
+        styled = [c(line, colour) for line in shown]
     timing = c(f" ({seconds:.1f}s)", DIM) if seconds is not None else ""
-    out = [c("  " + BRANCH + "  ", GREY) + c(shown[0][:width() - 6], colour) + timing]
-    for line in shown[1:]:
-        out.append(c("     ", GREY) + c(line[:width() - 6], colour))
+    out = [c("  " + BRANCH + "  ", GREY) + styled[0] + timing]
+    for line in styled[1:]:
+        out.append(c("     ", GREY) + line)
     if len(lines) > max_lines:
         out.append(c(f"     ... +{len(lines) - max_lines} lines", DIM))
     return "\n".join(out)
 
 
+def status_bar(model: str, last_prompt_tokens: int, num_ctx: int, in_tokens: int,
+               out_tokens: int, seconds: float, agents: str = "idle") -> str:
+    """The pinned bottom line: model, context used (the last prompt's size
+    against num_ctx), token totals and the session's generation speed."""
+    pct = 100 * last_prompt_tokens / num_ctx if num_ctx else 0.0
+    ctx_colour = RED if pct >= 85 else (ACCENT if pct >= 60 else GREY)
+    rate = f"{out_tokens / seconds:.0f} tok/s" if seconds else "-- tok/s"
+    return (c(f"model: {model}  ·  ", GREY) + c(f"context {pct:.0f}%", ctx_colour)
+            + c(f"  ·  tokens: {in_tokens:,} in / {out_tokens:,} out  ·  {rate}"
+                f"  ·  {agents}", GREY))
+
+
 def assistant(text: str) -> str:
-    return text.strip()
+    """A finished reply, with light markdown and highlighted code blocks.
+    Display only: the session keeps the raw text."""
+    from .render import markdown
+    return markdown(text.strip())
 
 
 def signoff(text: str) -> str:

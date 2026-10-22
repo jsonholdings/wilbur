@@ -46,3 +46,39 @@ def test_banner_contains_session_details_without_ansi():
     assert "8,192 tokens" in out
     assert "fast" in out
     assert "\x1b" not in out
+
+
+def _box_rows(out):
+    return [line for line in out.splitlines() if line[:1] in ("╭", "│", "╰")]
+
+
+@pytest.mark.parametrize("colour", [False, True])
+@pytest.mark.parametrize("model,cwd", [
+    ("huihui_ai/qwen3.8-abliterated:27b", "/home/user"),
+    ("模型-宽字符:27b", "/home/user/项目"),
+])
+def test_banner_box_rows_share_one_cell_width(monkeypatch, colour, model, cwd):
+    # Owner screenshot 2026-10-21 23:17: the first row's right border jutted out
+    # one cell, because the marker drew 2 cells while padding counted 1.
+    monkeypatch.setattr(ui, "_NO_COLOR", not colour)
+    rows = _box_rows(ui.banner(model, cwd, 65536))
+    if colour:
+        rows = [line for line in ui.banner(model, cwd, 65536).splitlines()
+                if any(ch in line for ch in "╭│╰")]
+    assert len(rows) == 7
+    assert len({ui.visible_width(r) for r in rows}) == 1
+
+
+def test_banner_box_avoids_terminal_dependent_marker():
+    # U+23FA is an emoji in some terminals and text in others; no single
+    # padding is right for both, so it must not appear inside the box.
+    rows = _box_rows(ui.banner("m", "/tmp", 1))
+    assert not any(ui.BULLET in r for r in rows)
+    assert ui.BOX_MARK in rows[1]
+
+
+def test_visible_width_counts_wide_zero_and_escapes():
+    assert ui.visible_width("abc") == 3
+    assert ui.visible_width("宽") == 2
+    assert ui.visible_width("é") == 1
+    assert ui.visible_width("\033[38;5;209mab\033[0m") == 2

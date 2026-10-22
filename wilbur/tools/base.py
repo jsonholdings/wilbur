@@ -43,6 +43,10 @@ class ToolResult:
     # Set when a tool wants to say something to the user that should not be
     # spent as model context (e.g. "wrote 340 lines to foo.py").
     display: str = ""
+    # Display-only before/after text for write_file/edit_file, rendered as a
+    # coloured diff in the terminal: {"path", "old", "new", "start", "created"}.
+    # Never sent to the model or saved in the session.
+    diff: dict | None = None
 
 
 class Tool(Protocol):
