@@ -85,6 +85,7 @@ class Config:
     subagent_timeout_s: int = 300
     constrained_tool_calls: bool = False  # opt-in: Ollama `format` schema constrains tool calls
     critic_pass: bool = False         # opt-in: one extra model call reviews each write
+    tool_hints: bool = True           # one-time steer when a call took the expensive road (2.41.0)
     image_generation: bool = False    # opt-in generate_image tool (runs through gpu-queue)
     image_model: str = "qwen-image-2512"  # or "qwen-image-2.1" (research-only licence)
     # A subagent's own tool-round budget, independent of the parent's

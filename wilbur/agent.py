@@ -8,6 +8,8 @@ from typing import Any, Callable
 
 from .config import Config
 from .context import CHARS_PER_TOKEN, estimate_tokens, compact
+from . import directives
+from .directives import tool_rules_for
 from .fake_backend import make_client
 from .llm import OllamaClient, ToolCall
 from .llm import OllamaClient as _RealOllamaClient
@@ -21,49 +23,39 @@ WRITE_TOOLS = {"write_file", "edit_file"}
 
 SYSTEM_PROMPT = """You are Wilbur, a coding agent working in a terminal on the user's machine.
 
-You act rather than advise. When the user asks for something, use your tools to
-do it: read the real files, run the real commands, make the real edits. Never
-guess at a file's contents when you can read it, and never claim a change works
-until a command you ran says so.
+You act rather than advise: read the real files, run the real commands, make the
+real edits. Never guess at a file's contents or a path when you can read or
+search for it, never state as fact what you have not checked this turn, and
+never claim a change works until a command you ran says so.
 
 Working rules:
-- Read a file before you edit or overwrite it.
-- Prefer edit_file over write_file for changes to existing files.
-- Use grep and glob to find code. Do not guess at paths.
+- Read a file before you edit it; prefer edit_file over write_file for existing files.
 - Run one tool at a time and read its result before deciding the next step.
-- For any job with more than two steps, call todo_write first and keep it current.
-- Break a large job down before starting it. Write the plan with todo_write, then
-  work one item at a time and mark each completed before moving on.
-- When a plan item is self-contained and would take many tool calls -- a search
-  across the codebase, a mechanical change over several files -- delegate it with
-  the task tool instead of doing it inline. You keep the plan; the subagent
-  spends the context.
+- More than two steps -> todo_write first: small, numbered, independently
+  testable items. Verify each with a real command and mark it completed before
+  the next; never one large unverified change.
 - When a command fails, read the error and fix the cause. Do not retry unchanged.
 - Match the style, naming, and structure of the surrounding code.
-- Split a long task into small, numbered, independently-testable chunks before
-  starting; verify each chunk with a real command before moving to the next,
-  rather than attempting the whole task in one unbroken run.
 
 Safety rules (the owner's global rules that apply to any coding agent):
 - Name exact targets. Never delete, kill, reset or overwrite by pattern, glob or
   "all": no `rm -rf` on a glob, `pkill -f`, `git add -A`/`git add .`,
   `git reset --hard`, `git clean`, `git stash` or `git checkout -- .`. Stage only
   the files you changed, by path.
-- Chain dependent steps with `&&`, never `;`, so a later step (commit, push)
-  runs only if the checks before it passed. Do not pipe a test run into
-  `tail`/`head` when you need its exit code.
+- Run the project's tests before every commit. Chain dependent steps with
+  `&&`, never `;`, so a commit or push runs only if its checks passed. Do not
+  pipe a test run into `tail`/`head` when you need its exit code.
 - Never print, log or commit a secret value (keys, tokens, passwords, .env
   contents). Refer to where it lives instead.
 - Never run sudo, su, doas or pkexec. You have no root access; every attempt
-  is refused and raises a security alert. Work as the current user, or report
-  that the step needs the owner.
+  is refused and raises a security alert. Report that the step needs the owner.
 - Do not push, deploy, send mail or spend money unless the user asked for it.
-- A check that could not run is not a pass. Say which a result is: verified
-  (you ran it just now), unknown (could not check, and why), or assumed.
+- A check that could not run is not a pass. Label each claim: verified (you
+  ran it just now), unknown (could not check, and why), or assumed.
 - When a version-carrying file changes, bump the version and every place that
   shows it in the same change.
 
-Be concise. Report what you did and what it means, not how you went about it.
+Be concise. Report what is now true and what it unblocks, not how you got there.
 When you have finished the task, say so plainly and stop calling tools."""
 
 # Asked with no tools, once, when the turn budget runs out. Kept off the
@@ -173,7 +165,15 @@ class Agent:
         # because consecutive tool failures hit tool_failure_stop_at, so the
         # REPL names that cause rather than letting keep-going nudge on.
         self.tool_circuit_tripped = False
-        system = SYSTEM_PROMPT + (f"\n\n{system_extra}" if system_extra else "")
+        # One-time tool-choice hints (2.41.0): kinds already given this
+        # session, and the current run of consecutive search calls.
+        self._hints_given: set[str] = set()
+        self._search_run = 0
+        # Tool rules sit inside the static prefix: built once here from a
+        # PATH probe cached per process, so the prefix never changes mid-session.
+        rules = tool_rules_for(set(registry))
+        system = SYSTEM_PROMPT + (f"\n\n{rules}" if rules else "")
+        system += f"\n\n{system_extra}" if system_extra else ""
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
 
     # ------------------------------------------------------------------ #
@@ -600,7 +600,23 @@ class Agent:
             if line:
                 return output + "\n\n[harness ran the project's own check]\n" + line
             return output
-        return result.output
+        return result.output + self._tool_hint(call)
+
+    def _tool_hint(self, call: ToolCall) -> str:
+        """A one-time steer appended to a successful result when the call took
+        the expensive road (wilbur.directives). Rides in the tool result, never
+        the system prompt, so the cached prefix is untouched."""
+        if not getattr(self.config, "tool_hints", True):
+            return ""
+        args = call.arguments or {}
+        searching = directives.is_search_call(call.name, args)
+        self._search_run = (self._search_run + 1) if searching else 0
+        kind = directives.classify(call.name, args, self._search_run, "task" in self.registry)
+        if kind is None or kind in self._hints_given:
+            return ""
+        self._hints_given.add(kind)
+        self.on_event("tool_hint", {"name": call.name, "kind": kind})
+        return "\n\n" + directives.HINTS[kind]
 
     @staticmethod
     def _arg_signature(call: ToolCall) -> str:
