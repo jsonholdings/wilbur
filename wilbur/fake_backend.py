@@ -34,7 +34,7 @@ import threading
 from pathlib import Path
 from typing import Any, Iterable
 
-from .llm import OllamaClient, Reply, ToolCall, recover_tool_calls
+from .llm import OllamaClient, Reply, ServerActivity, ToolCall, recover_tool_calls
 
 BACKENDS = ("ollama", "fake")
 DEFAULT_EXHAUSTED = "done"
@@ -177,4 +177,11 @@ def make_client(config: Any, model: str, ollama_cls: Any = OllamaClient) -> Any:
     stall = getattr(config, "first_token_timeout_s", 0)
     if stall and isinstance(client, OllamaClient):
         client.stall_timeout = float(stall)
+    if isinstance(client, OllamaClient):
+        client.stall_busy_max_s = float(getattr(config, "stall_busy_max_s", 600))
+        client.num_predict = int(getattr(config, "num_predict", 0) or 0)
+        mode = getattr(config, "stall_busy_check", "auto") or "off"
+        if mode != "off":
+            client.busy_check = ServerActivity(
+                config.base_url, model, client.keep_alive, mode).check
     return client

@@ -86,6 +86,13 @@ RUNAWAY_NUDGE = (
     "and do the next concrete thing: call a tool now, or give a two-line status "
     "(what is done, what is next). Do not repeat the explanation.")
 
+# A reply the server stopped at the output cap (num_predict): cut off, not done.
+OUTPUT_CAP_NUDGE = (
+    "Your last reply hit the output cap and was cut off before it finished. "
+    "Do the work in smaller pieces: write a large file in parts of about 200 "
+    "lines (write_file, then edit_file to add the rest) and take one step per "
+    "tool call. Continue from where it was cut off; do not repeat it.")
+
 # When the empty-reply retries are spent but the model did put something in the
 # reasoning channel, surface a short summary of it rather than the whole wall.
 _THINKING_SUMMARY_CHARS = 1500
@@ -195,6 +202,8 @@ class Agent:
         # One compact-and-retry per run for an empty reply that came back with
         # the window full: a context-full reply is not an empty reply.
         context_full_retried = False
+        # One nudge per run for a reply cut off at the output cap (2.41.1).
+        output_cap_nudged = False
         # Test commands run in this call (the model's or the harness's own):
         # the claims guard (wilbur.doneclaim) reads it.
         self.turn_test_runs = 0
@@ -252,6 +261,18 @@ class Agent:
                 self.messages.pop()
                 self._maybe_compact(force=True, reason="context_full")
                 continue
+
+            if getattr(reply, "truncated", False) and not reply.tool_calls:
+                cap = getattr(self.client, "num_predict", 0) or reply.eval_tokens
+                self.on_event("output_cap", {"tokens": reply.eval_tokens, "cap": cap,
+                                             "nudged": not output_cap_nudged})
+                if not output_cap_nudged:
+                    output_cap_nudged = True
+                    self.messages.append({"role": "user", "content": OUTPUT_CAP_NUDGE})
+                    continue
+                final = ((reply.content or "").rstrip() +
+                         f"\n\n(reply cut off at the output cap of {cap:,} tokens)")
+                break
 
             if not reply.tool_calls:
                 content = reply.content or ""

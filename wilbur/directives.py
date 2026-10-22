@@ -39,6 +39,8 @@ TOOL_RULES = (
     ("task", "- Search or change spanning many files you need not watch -> task, with a standalone brief. "
              "One or two files -> do it inline."),
     ("list_skills", "- Unfamiliar kind of job (tests, changelog, benchmark) -> list_skills once; load_skill only if one matches."),
+    ("write_file", "- Large file or long script -> write it in parts of ~200 lines or fewer "
+                   "(write_file, then edit_file); split a big step into several tool calls."),
     ("run_bash", "- Risky multi-file change in a tree with uncommitted work you did not make -> "
                  "`git worktree add` on a new branch, not in place."),
 )

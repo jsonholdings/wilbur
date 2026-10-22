@@ -616,6 +616,10 @@ class Repl:
             spinner = getattr(self, "_spinner", None)
             if spinner is not None:
                 spinner.set_phase(_phase_text(data))
+        elif kind == "output_cap":
+            print(ui.notice(
+                f"reply hit the output cap ({data.get('cap', 0):,} tokens, num_predict) "
+                "and was cut off" + ("; asking for smaller steps" if data.get("nudged") else "")))
         elif kind == "compact":
             print(ui.notice(
                 f"compacted context: {data['before_tokens']:,} -> "
@@ -1611,4 +1615,6 @@ def _phase_text(data: dict) -> str | None:
         return f"reading ~{tokens:,} tokens" if tokens else "reading prompt"
     if phase in {"thinking", "writing"}:
         return phase
+    if phase == "busy":
+        return f"model still generating ({data.get('silent_s', 0)}s without output)"
     return None

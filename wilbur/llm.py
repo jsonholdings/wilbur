@@ -13,12 +13,20 @@ into a broken one, so the client recovers them rather than discarding them.
 from __future__ import annotations
 
 import json
+import os
+import queue
 import re
+import shutil
 import socket
+import subprocess
+import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Iterator
 
 TOOL_TAG_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
@@ -77,6 +85,9 @@ class Reply:
     thinking: str = ""
     prompt_tokens: int = 0
     eval_tokens: int = 0
+    # True when the server stopped the reply at the output cap (num_predict,
+    # done_reason "length"): the reply is cut off, not finished.
+    truncated: bool = False
 
 
 def _balanced_json_objects(text: str) -> Iterator[tuple[int, int]]:
@@ -257,6 +268,123 @@ def parse_constrained_reply(content: str, known: set[str]) -> tuple[list[ToolCal
     return calls, text if isinstance(text, str) else ""
 
 
+_GO_DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s)")
+_GO_UNIT_SECONDS = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
+
+
+def keep_alive_seconds(keep_alive: str) -> float | None:
+    """Seconds for an Ollama keep_alive value ("30m", "1h30m", "300", "300s").
+    None when it cannot bound an expiry: empty (server default unknown here),
+    negative (keep forever), zero, or unparseable."""
+    text = (keep_alive or "").strip()
+    if not text:
+        return None
+    try:
+        seconds = float(text)
+    except ValueError:
+        if not re.fullmatch(r"(?:\d+(?:\.\d+)?(?:ms|h|m|s))+", text):
+            return None
+        seconds = sum(float(n) * _GO_UNIT_SECONDS[u] for n, u in _GO_DURATION_RE.findall(text))
+    return seconds if seconds > 0 else None
+
+
+def _parse_ollama_time(text: str) -> datetime | None:
+    """Ollama's RFC 3339 times carry nanoseconds, which fromisoformat rejects;
+    keep six fractional digits."""
+    if not text:
+        return None
+    trimmed = re.sub(r"(\.\d{6})\d+", r"\1", text).replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(trimmed)
+    except ValueError:
+        return None
+
+
+class ServerActivity:
+    """Answers "is the model server still generating?" when a stream has gone
+    quiet past the stall window.
+
+    Measured 2026-10-21 (Ollama 0.40.2, qwen3.8 27b): while the model writes a
+    tool call, Ollama buffers it and sends NO bytes until the call is complete
+    -- Wilbur's socket sat at lastrcv 109 s while the server's n_gen climbed
+    from 7,215 to 9,489 tokens. Before 2.41.1 that silence raised "model server
+    not responding" at 120 s and cancelled a healthy generation (22:14, 22:16).
+
+    Two signals, both describing the SERVER, so they work through the
+    contrib/remote-gpu tunnel too:
+
+    - /api/ps: Ollama refreshes a model's expires_at to (finish + keep_alive)
+      when a request ends, and leaves it alone while one runs. If it was last
+      set before our silence began, nothing finished since: still working.
+      Server time comes from the response's Date header, so a laptop's clock
+      skew does not matter.
+    - local nvidia-smi utilisation, only when the server is on this machine
+      (loopback URL) and /api/ps could not decide (keep_alive unknown or -1).
+
+    check(silent_s) returns True (working), False (stopped), or None (could
+    not tell -- the caller keeps the old raise-at-the-window behaviour)."""
+
+    GPU_BUSY_PERCENT = 20
+    SLACK_S = 5.0
+
+    def __init__(self, base_url: str, model: str, keep_alive: str, mode: str = "auto",
+                 *, timeout: float = 5.0) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.keep_alive_s = keep_alive_seconds(keep_alive)
+        self.mode = mode
+        self.timeout = timeout
+
+    def check(self, silent_s: float) -> bool | None:
+        verdict: bool | None = None
+        if self.mode in ("auto", "ps"):
+            verdict = self._from_ps(silent_s)
+        if verdict is None and self.mode in ("auto", "gpu"):
+            verdict = self._from_gpu()
+        return verdict
+
+    def _from_ps(self, silent_s: float) -> bool | None:
+        try:
+            with urllib.request.urlopen(self.base_url + "/api/ps", timeout=self.timeout) as resp:
+                body = json.loads(resp.read())
+                date_header = resp.headers.get("Date") if resp.headers else None
+        except Exception:  # noqa: BLE001 -- an unreachable probe is "cannot tell"
+            return None
+        models = body.get("models") if isinstance(body, dict) else None
+        if not isinstance(models, list):
+            return None
+        entry = next((m for m in models if isinstance(m, dict)
+                      and self.model in (m.get("name"), m.get("model"))), None)
+        if entry is None:
+            return False  # not even loaded: nothing is generating for us
+        if self.keep_alive_s is None:
+            return None
+        expires = _parse_ollama_time(str(entry.get("expires_at") or ""))
+        if expires is None:
+            return None
+        try:
+            server_now = parsedate_to_datetime(date_header) if date_header else None
+        except (TypeError, ValueError):
+            server_now = None
+        if server_now is None:
+            server_now = datetime.now(timezone.utc)
+        since_set = (server_now - expires).total_seconds() + self.keep_alive_s
+        return since_set >= silent_s - self.SLACK_S
+
+    def _from_gpu(self) -> bool | None:
+        host = urllib.parse.urlparse(self.base_url).hostname or ""
+        if host not in ("127.0.0.1", "localhost", "::1") or not shutil.which("nvidia-smi"):
+            return None
+        try:
+            out = subprocess.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=self.timeout, check=True).stdout
+            busiest = max(int(v) for v in out.split() if v.strip().isdigit())
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return None
+        return busiest >= self.GPU_BUSY_PERCENT
+
+
 class OllamaClient:
     def __init__(
         self,
@@ -282,6 +410,16 @@ class OllamaClient:
         # ModelNotResponding: covers prompt reading before the first token,
         # and any gap between streamed chunks. Config.first_token_timeout_s.
         self.stall_timeout: float = 120.0
+        # When a stall window passes, busy_check(silent_s) is asked whether the
+        # server is still generating (ServerActivity.check; None = no probe,
+        # the pre-2.41.1 behaviour). While it says True the wait goes on, up to
+        # stall_busy_max_s of continuous silence. Config.stall_busy_check,
+        # Config.stall_busy_max_s.
+        self.busy_check: Any = None
+        self.stall_busy_max_s: float = 600.0
+        # Output cap per reply (Ollama num_predict; 0 = none). A reply that hits
+        # it comes back with Reply.truncated. Config.num_predict.
+        self.num_predict: int = 0
         # Called as on_progress(phase, info) while a streamed reply arrives:
         # phase is "thinking", "writing" or "done". Set by the Agent.
         self.on_progress: Any = None
@@ -309,26 +447,106 @@ class OllamaClient:
             except Exception:  # noqa: BLE001 -- display must never break a call
                 pass
 
+    def _open(self, request: urllib.request.Request, read_timeout: float) -> Any:
+        """Connect, retrying only transient failures with backoff. A timeout is
+        a stall, never retried."""
+        attempt = 0
+        while True:
+            try:
+                return urllib.request.urlopen(request, timeout=read_timeout)
+            except Exception as exc:  # noqa: BLE001 -- classified below
+                if _is_timeout(exc) or not _is_transient(exc) or attempt >= self.max_retries:
+                    raise
+                self._sleep(self.backoff_base * (2 ** attempt))
+                attempt += 1
+
+    def _read_lines(self, request: urllib.request.Request, read_timeout: float,
+                    out: "queue.Queue[tuple[str, Any]]", stop: threading.Event,
+                    holder: dict[str, Any]) -> None:
+        """Reader thread: open the stream and hand each raw line to `out`.
+        A blocking read never has to be resumed after a socket timeout (which a
+        timed-out socket file refuses), so the stall decision lives in the
+        caller's queue wait, not here."""
+        try:
+            response = self._open(request, read_timeout)
+        except BaseException as exc:  # noqa: BLE001 -- re-raised by the caller
+            out.put(("error", exc))
+            return
+        with holder["lock"]:
+            holder["response"] = response
+        try:
+            while not stop.is_set():
+                line = response.readline()
+                out.put(("line", line))
+                if not line:
+                    return
+        except BaseException as exc:  # noqa: BLE001 -- re-raised by the caller
+            out.put(("error", exc))
+        finally:
+            # Closed under the lock _abort takes, so _abort never shuts down a
+            # descriptor number the OS has already handed to another socket.
+            with holder["lock"]:
+                holder["response"] = None
+                try:
+                    response.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    @staticmethod
+    def _abort(holder: dict[str, Any]) -> None:
+        """Unblock the reader thread: shutting the connection down makes a
+        blocked read return EOF. Works on a duplicate of the fd, so nothing
+        here touches a private attribute."""
+        with holder["lock"]:
+            OllamaClient._abort_locked(holder.get("response"))
+
+    @staticmethod
+    def _abort_locked(response: Any) -> None:
+        if response is None:
+            return
+        try:
+            fd = response.fileno()
+            dup = socket.socket(fileno=os.dup(fd))
+            try:
+                dup.shutdown(socket.SHUT_RDWR)
+            finally:
+                dup.close()
+        except Exception:  # noqa: BLE001 -- a fake or closed response
+            close = getattr(response, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _still_working(self, silent: float) -> bool:
+        if self.busy_check is None or silent >= self.stall_busy_max_s:
+            return False
+        try:
+            return self.busy_check(silent) is True
+        except Exception:  # noqa: BLE001 -- a broken probe must not hide a stall
+            return False
+
     def _stream(self, request: urllib.request.Request) -> dict[str, Any]:
         """POST a streaming chat and fold the NDJSON chunks into one
         non-streamed-shaped response.
 
-        The socket timeout is the stall window, so it bounds every silence:
-        the wait for the first byte (model load + prompt reading) and each gap
-        between chunks. A stall raises ModelNotResponding at once; only a
-        failure to connect (or a 5xx) is retried with backoff."""
-        attempt = 0
-        while True:
-            try:
-                response = urllib.request.urlopen(request, timeout=self.stall_timeout)
-                break
-            except Exception as exc:  # noqa: BLE001 -- classified below
-                if _is_timeout(exc):
-                    raise ModelNotResponding(self.stall_timeout) from exc
-                if not _is_transient(exc) or attempt >= self.max_retries:
-                    raise
-                self._sleep(self.backoff_base * (2 ** attempt))
-                attempt += 1
+        Every silence -- the wait for the first byte (model load + prompt
+        reading) and each gap between chunks -- is bounded by the stall window.
+        When it passes, busy_check asks the server whether it is still
+        generating (Ollama sends nothing while it writes a tool call); while it
+        is, the wait goes on with a "busy" progress event, up to
+        stall_busy_max_s. Only a server that has really stopped raises
+        ModelNotResponding. A failure to connect (or a 5xx) is retried with
+        backoff."""
+        out: queue.Queue[tuple[str, Any]] = queue.Queue()
+        stop = threading.Event()
+        holder: dict[str, Any] = {"lock": threading.Lock(), "response": None}
+        read_timeout = self.stall_timeout + max(0.0, self.stall_busy_max_s)
+        reader = threading.Thread(
+            target=self._read_lines, args=(request, read_timeout, out, stop, holder),
+            name="wilbur-stream", daemon=True)
+        reader.start()
 
         content: list[str] = []
         thinking: list[str] = []
@@ -336,14 +554,25 @@ class OllamaClient:
         final: dict[str, Any] = {}
         phase = ""
         started = self._clock()
-        with response:
+        last_byte = started
+        try:
             while True:
                 try:
-                    line = response.readline()
-                except Exception as exc:  # noqa: BLE001
-                    if _is_timeout(exc):
-                        raise ModelNotResponding(self.stall_timeout) from exc
-                    raise
+                    kind, item = out.get(timeout=self.stall_timeout)
+                except queue.Empty:
+                    silent = self._clock() - last_byte
+                    over_total = bool(self.timeout) and self._clock() - started > self.timeout
+                    if over_total or not self._still_working(silent):
+                        raise ModelNotResponding(silent) from None
+                    phase = "busy"
+                    self._progress("busy", silent_s=int(silent))
+                    continue
+                if kind == "error":
+                    if _is_timeout(item):
+                        raise ModelNotResponding(self._clock() - last_byte) from item
+                    raise item
+                last_byte = self._clock()
+                line = item
                 if not line:
                     break
                 line = line.strip()
@@ -369,12 +598,23 @@ class OllamaClient:
                     break
                 if self.timeout and self._clock() - started > self.timeout:
                     raise ModelNotResponding(self.timeout)
+        except BaseException:
+            stop.set()
+            self._abort(holder)
+            raise
+        finally:
+            stop.set()
+            reader.join(0.5)  # a real server closes the stream right after done
+            if reader.is_alive():
+                self._abort(holder)
+                reader.join(5.0)
         self._progress("done", prompt_tokens=final.get("prompt_eval_count") or 0)
         return {
             "message": {"content": "".join(content), "thinking": "".join(thinking),
                         "tool_calls": tool_calls},
             "prompt_eval_count": final.get("prompt_eval_count") or 0,
             "eval_count": final.get("eval_count") or 0,
+            "done_reason": final.get("done_reason") or "",
         }
 
     def chat(
@@ -393,6 +633,8 @@ class OllamaClient:
             "stream": True,
             "options": {"temperature": temperature, "top_p": top_p, "num_ctx": num_ctx},
         }
+        if self.num_predict > 0:
+            payload["options"]["num_predict"] = self.num_predict
         if self.keep_alive:
             payload["keep_alive"] = self.keep_alive
         if tools:
@@ -436,4 +678,5 @@ class OllamaClient:
             thinking=message.get("thinking", "") or "",
             prompt_tokens=data.get("prompt_eval_count") or 0,
             eval_tokens=data.get("eval_count") or 0,
+            truncated=data.get("done_reason") == "length",
         )

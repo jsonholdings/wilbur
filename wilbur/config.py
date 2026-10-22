@@ -72,6 +72,19 @@ class Config:
     # request_timeout. Covers model load + prompt reading before the first
     # token (~60 s for 64k tokens at 1,100 tok/s on this card).
     first_token_timeout_s: int = 120
+    # When that window passes, ask the server whether it is still generating
+    # before reporting it dead (2.41.1): Ollama sends no bytes while the model
+    # writes a tool call, so a long write_file looked like a dead server.
+    # "auto" = Ollama /api/ps, then local nvidia-smi; "ps"; "gpu"; "off" = the
+    # old raise-at-the-window behaviour.
+    stall_busy_check: str = "auto"
+    # Longest continuous silence tolerated while the server reports busy.
+    stall_busy_max_s: int = 600
+    # Output cap per reply (Ollama num_predict; 0 = no cap). Runaway generation
+    # ends with a clear "hit the output cap" notice instead of a hang. 32,768
+    # tokens is ~7 min at 75 tok/s, above the longest real reply measured
+    # (23,641 tokens, 2026-10-21).
+    num_predict: int = 32768
     # Ollama keep_alive sent on EVERY /api/chat request, so Wilbur's model stays resident between
     # turns without any separate re-arm call (2.39.1: a bare /api/generate re-arm carried no
     # options, so Ollama reloaded the model at its default context and the next chat reloaded it

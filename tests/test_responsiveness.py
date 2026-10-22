@@ -52,7 +52,9 @@ def test_streamed_reply_reports_each_phase_and_folds_the_chunks(monkeypatch):
     client.on_progress = lambda phase, info: phases.append(phase)
     reply = client.chat([{"role": "user", "content": "hi"}])
     assert sent[0][0]["stream"] is True
-    assert sent[0][1] == 120.0, "the socket timeout is the stall window, not 600 s"
+    # 2.41.1: the stall window is enforced by the caller's queue wait; the
+    # socket timeout only bounds the reader thread (window + busy cap).
+    assert sent[0][1] == 120.0 + 600.0
     assert phases == ["thinking", "writing", "done"]
     assert reply.content == "hello" and reply.thinking == "hmm"
     assert [c.name for c in reply.tool_calls] == ["read_file"]
@@ -71,7 +73,7 @@ def test_no_first_byte_within_the_window_is_reported_not_retried(monkeypatch):
     client.stall_timeout = 5
     with pytest.raises(ModelNotResponding) as err:
         client.chat([{"role": "user", "content": "hi"}])
-    assert attempts == [5] and sleeps == []
+    assert attempts == [5 + 600.0] and sleeps == []
     assert "not responding" in str(err.value) and "/retry" in str(err.value)
 
 

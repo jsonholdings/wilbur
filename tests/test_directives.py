@@ -70,6 +70,8 @@ def test_prompt_stays_inside_the_token_budget():
     # It shrank: the duplicate owner rules paid for the new ones.
     assert len(full) < BASELINE_CHARS
     assert int(len(full) / CHARS_PER_TOKEN) < 1598
+    # 2.41.1 added the write-in-parts rule: within +3% of 2.41.0's 5,289 chars.
+    assert len(full) <= 5289 * 1.03, len(full)
 
 
 def test_host_probe_is_cached_so_the_prefix_cannot_change():
