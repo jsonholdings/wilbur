@@ -3,6 +3,9 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.42.1
+- Safety hint (wilbur/directives.py): a `run_bash` command that unbinds/binds/removes a host PCI/USB controller or driver via sysfs, or runs `modprobe -r`, now earns a `host_hw` tool-result hint -- that resets the controller, and a shared one may also carry the keyboard, disks or security keys. It steers to passing the device into a container (`--device`/`--net=host`/cgroup rules) instead and to stopping rather than retrying a failed host-level op. Rides in the tool RESULT, not the system prompt, so the cached prefix and its token budget are untouched (the regex also matches the /sys path inside a `docker run --privileged sh -c '...'`). Added after Wilbur's `xhci unbind` on 2026-10-24 reset USB bus 3 and dropped the Alfa adapters. Test in tests/test_directives.py.
+
 ## 2.42.0
 - Syntax highlighting, our own code (no new dependency): wilbur/highlight.py lexes Python, JS/TS, shell, JSON, YAML, C/C++, C#, PHP, SQL, Markdown and diff, colouring keywords, strings, comments, numbers and builtins in the 256-colour palette. Fenced code blocks in replies and `read_file` views in tool results are highlighted; Python triple-quoted strings and `/* */` comments carry across lines. A 2,000-line file renders in about 17-22 ms (tests/test_highlight.py, tests/test_render.py).
 - Light markdown for replies (wilbur/render.py): headings, bold, italic, `inline code`, bullet and numbered lists, block quotes, rules, links (OSC 8, clickable where the terminal supports it, with the URL shown) and tables aligned by display cells, so wide characters keep columns straight. `MarkdownStream` renders chunk by chunk, so a fence that opens in one chunk and closes in a later one still renders as code.

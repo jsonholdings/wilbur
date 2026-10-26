@@ -138,3 +138,17 @@ def test_hints_never_touch_the_system_prompt(fake_backend_config, tmp_path):
     before = _system(agent)
     agent.run("go")
     assert _system(agent) == before
+
+
+def test_host_hardware_surgery_earns_the_danger_hint():
+    # Resetting a shared controller (the 2026-10-24 xhci unbind) must be flagged,
+    # including when it is wrapped in a `docker run --privileged sh -c '...'`.
+    for cmd in (
+        "echo 0000:04:00.0 > /sys/bus/pci/drivers/xhci_hcd/unbind",
+        "docker run --rm --privileged wificrack sh -c 'echo 3-2 > /sys/bus/usb/drivers/usb/unbind'",
+        "modprobe -r xhci_hcd",
+    ):
+        assert directives.classify("run_bash", {"command": cmd}, 0, True) == "host_hw", cmd
+    # An ordinary command earns no hint, and the hint names the real risk.
+    assert directives.classify("run_bash", {"command": "ls -la"}, 0, True) is None
+    assert "controller" in directives.HINTS["host_hw"] and "--device" in directives.HINTS["host_hw"]

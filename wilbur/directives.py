@@ -71,6 +71,15 @@ def tool_rules_for(tools: set[str], host: frozenset[str] | None = None) -> str:
 
 _SHELL_SEARCH = re.compile(r"^\s*(?:cd\s+\S+\s*&&\s*)?(grep|egrep|rg|find|ls\s+-[a-zA-Z]*R)\b")
 _BARE_TEST = re.compile(r"(\bpytest\b|-m\s+pytest|\bnpm\s+(run\s+)?test\b|\bmake\s+test\b)")
+# Host-hardware surgery that resets/removes a device on a SHARED controller:
+# unbind/bind/remove a PCI or USB controller or driver via sysfs, or remove a
+# host kernel module. A --privileged container doing this needs no sudo, so the
+# no-root prompt rule never catches it. Matches the /sys path even inside a
+# `docker run --privileged sh -c '...'`. 2026-10-24: an xhci unbind dropped the
+# Alfa adapters (and sat on the same controller as the keyboard and YubiKey).
+_HOST_HW = re.compile(r"/sys/bus/(?:pci|usb)/\S*(?:unbind|bind|remove)"
+                      r"|/sys/devices/\S*(?:unbind|remove)"
+                      r"|\bmodprobe\s+-r\b")
 SEARCH_TOOLS = {"grep", "glob", "list_files"}
 SEARCH_RUN_FOR_TASK = 6
 
@@ -78,6 +87,7 @@ HINTS = {
     "shell_search": "[harness] tip: the grep and glob tools search faster and return file:line; use them instead of shell grep/find.",
     "bare_tests": "[harness] tip: run_tests runs this and returns a compact pass/fail summary with file:line per failure.",
     "delegate": "[harness] tip: that is many searches in a row; a broad search belongs in the task tool, which returns only the conclusion.",
+    "host_hw": "[harness] danger: unbinding/binding/removing a host PCI/USB controller or driver (or modprobe -r) resets that controller -- a shared one may also carry the keyboard, disks or security keys, which drop with it. To give a container a device, pass it in (--device, --net=host, cgroup device rules); do not reset the host. If this failed, the approach is wrong: stop and report, do not retry it.",
 }
 
 
@@ -85,6 +95,8 @@ def classify(name: str, args: dict, search_run: int, has_task: bool) -> str | No
     """Which hint (if any) this successful call earns. Pure; no state."""
     if name == "run_bash":
         command = str((args or {}).get("command", ""))
+        if _HOST_HW.search(command):
+            return "host_hw"
         if _SHELL_SEARCH.search(command):
             return "delegate" if has_task and search_run >= SEARCH_RUN_FOR_TASK else "shell_search"
         if _BARE_TEST.search(command) and "gate-run" not in command:
