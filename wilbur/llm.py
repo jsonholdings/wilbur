@@ -88,6 +88,9 @@ class Reply:
     # True when the server stopped the reply at the output cap (num_predict,
     # done_reason "length"): the reply is cut off, not finished.
     truncated: bool = False
+    # True when the harness cut the stream because the reasoning ran past
+    # OllamaClient.think_budget with no answer or tool call started.
+    thinking_cut: bool = False
 
 
 def _balanced_json_objects(text: str) -> Iterator[tuple[int, int]]:
@@ -420,6 +423,11 @@ class OllamaClient:
         # Output cap per reply (Ollama num_predict; 0 = none). A reply that hits
         # it comes back with Reply.truncated. Config.num_predict.
         self.num_predict: int = 0
+        # Reasoning cap per reply, in streamed thinking chunks (~1 token each;
+        # 0 = none). A reply still thinking past it, with no content or tool
+        # call started, is cut and comes back with Reply.thinking_cut.
+        # Config.think_budget_tokens.
+        self.think_budget: int = 0
         # Called as on_progress(phase, info) while a streamed reply arrives:
         # phase is "thinking", "writing" or "done". Set by the Agent.
         self.on_progress: Any = None
@@ -527,7 +535,7 @@ class OllamaClient:
         except Exception:  # noqa: BLE001 -- a broken probe must not hide a stall
             return False
 
-    def _stream(self, request: urllib.request.Request) -> dict[str, Any]:
+    def _stream(self, request: urllib.request.Request, think_budget: int = 0) -> dict[str, Any]:
         """POST a streaming chat and fold the NDJSON chunks into one
         non-streamed-shaped response.
 
@@ -538,7 +546,11 @@ class OllamaClient:
         is, the wait goes on with a "busy" progress event, up to
         stall_busy_max_s. Only a server that has really stopped raises
         ModelNotResponding. A failure to connect (or a 5xx) is retried with
-        backoff."""
+        backoff.
+
+        think_budget > 0 cuts the stream once that many thinking chunks have
+        arrived with no content or tool call yet: closing the connection makes
+        Ollama stop generating, and done_reason comes back "think_budget"."""
         out: queue.Queue[tuple[str, Any]] = queue.Queue()
         stop = threading.Event()
         holder: dict[str, Any] = {"lock": threading.Lock(), "response": None}
@@ -552,6 +564,7 @@ class OllamaClient:
         thinking: list[str] = []
         tool_calls: list[dict[str, Any]] = []
         final: dict[str, Any] = {}
+        thinking_cut = False
         phase = ""
         started = self._clock()
         last_byte = started
@@ -596,6 +609,10 @@ class OllamaClient:
                 final = chunk  # a server that ignores stream=True sends one object
                 if chunk.get("done"):
                     break
+                if (think_budget > 0 and len(thinking) > think_budget
+                        and not content and not tool_calls):
+                    thinking_cut = True
+                    break
                 if self.timeout and self._clock() - started > self.timeout:
                     raise ModelNotResponding(self.timeout)
         except BaseException:
@@ -613,8 +630,8 @@ class OllamaClient:
             "message": {"content": "".join(content), "thinking": "".join(thinking),
                         "tool_calls": tool_calls},
             "prompt_eval_count": final.get("prompt_eval_count") or 0,
-            "eval_count": final.get("eval_count") or 0,
-            "done_reason": final.get("done_reason") or "",
+            "eval_count": (len(thinking) if thinking_cut else final.get("eval_count") or 0),
+            "done_reason": "think_budget" if thinking_cut else final.get("done_reason") or "",
         }
 
     def chat(
@@ -626,7 +643,10 @@ class OllamaClient:
         num_ctx: int = 65536,
         temperature: float = 0.15,
         top_p: float = 0.9,
+        think: bool | None = None,
     ) -> Reply:
+        """think=False asks the server for no reasoning at all (Ollama `think`);
+        the default leaves the model's own setting and applies think_budget."""
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -637,6 +657,8 @@ class OllamaClient:
             payload["options"]["num_predict"] = self.num_predict
         if self.keep_alive:
             payload["keep_alive"] = self.keep_alive
+        if think is False:
+            payload["think"] = False
         if tools:
             payload["tools"] = tools
         constrained = bool(self.constrained_tool_calls and tools)
@@ -648,7 +670,7 @@ class OllamaClient:
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
-        data = self._stream(request)
+        data = self._stream(request, 0 if think is False else self.think_budget)
 
         message = data.get("message", {})
         content = message.get("content", "") or ""
@@ -679,4 +701,5 @@ class OllamaClient:
             prompt_tokens=data.get("prompt_eval_count") or 0,
             eval_tokens=data.get("eval_count") or 0,
             truncated=data.get("done_reason") == "length",
+            thinking_cut=data.get("done_reason") == "think_budget",
         )

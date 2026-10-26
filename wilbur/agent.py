@@ -204,6 +204,9 @@ class Agent:
         context_full_retried = False
         # One nudge per run for a reply cut off at the output cap (2.41.1).
         output_cap_nudged = False
+        # Set when the last reply was all reasoning and no answer: the same
+        # request goes again with thinking off (2.43.0).
+        think_off_next = False
         # Test commands run in this call (the model's or the harness's own):
         # the claims guard (wilbur.doneclaim) reads it.
         self.turn_test_runs = 0
@@ -225,6 +228,7 @@ class Agent:
                 estimate_tokens(outgoing[len(self.messages):]))
             started = time.time()
             self.on_event("model_phase", {"phase": "reading", "tokens": sent_estimate})
+            sent_think_off, think_off_next = think_off_next, False
             reply = self.client.chat(
                 outgoing,
                 self.schema,
@@ -232,6 +236,7 @@ class Agent:
                 num_ctx=self.config.num_ctx,
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
+                **({"think": False} if sent_think_off else {}),
             )
             elapsed = time.time() - started
             if reply.prompt_tokens:
@@ -260,6 +265,26 @@ class Agent:
                 context_full_retried = True
                 self.messages.pop()
                 self._maybe_compact(force=True, reason="context_full")
+                continue
+
+            if (not reply.tool_calls and not (reply.content or "").strip()
+                    and not sent_think_off
+                    and (getattr(reply, "thinking_cut", False)
+                         or getattr(reply, "truncated", False)
+                         or (reply.thinking or "").strip())):
+                # All reasoning, no answer: the reasoning ran past the budget
+                # (thinking_cut), filled the output cap, or ended with nothing
+                # in the message. Measured 2026-10-26: three ~6-minute calls
+                # each spent the whole 32k cap reasoning and came back empty,
+                # and the second cap hit ended the run. Ask the identical
+                # request again with thinking off: the prompt is unchanged, so
+                # the server's cached prefix is reused, and no nudge is added
+                # to the transcript.
+                self.messages.pop()
+                think_off_next = True
+                self.on_event("think_off_retry", {
+                    "tokens": reply.eval_tokens, "cut": getattr(reply, "thinking_cut", False),
+                    "truncated": getattr(reply, "truncated", False)})
                 continue
 
             if getattr(reply, "truncated", False) and not reply.tool_calls:

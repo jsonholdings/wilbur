@@ -626,6 +626,10 @@ class Repl:
             spinner = getattr(self, "_spinner", None)
             if spinner is not None:
                 spinner.set_phase(_phase_text(data))
+        elif kind == "think_off_retry":
+            print(ui.notice(
+                f"reasoning ran {data.get('tokens', 0):,} tokens with no answer; "
+                "asking again with thinking off"))
         elif kind == "output_cap":
             print(ui.notice(
                 f"reply hit the output cap ({data.get('cap', 0):,} tokens, num_predict) "

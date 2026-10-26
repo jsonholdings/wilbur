@@ -3,6 +3,11 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.43.0
+- Runaway reasoning no longer stalls or ends a run. Measured 2026-10-26 on huihui_ai/qwen3.8-abliterated:27b (Ollama 0.40.2): three calls in a row each ran about 6 minutes, spent the whole 32,768-token output cap in the reasoning channel on a 30k prompt (Ollama saved a 62,602-token prompt+reply), and came back with nothing in the message; the second cap hit ended the run. Live probe the same evening: a one-line "is 1000003 prime?" was still reasoning at 3,000 tokens.
+- Reasoning budget: new config `think_budget_tokens` (default 8192, ~90 s on the 3090; 0 = none). A reply still reasoning past it, with no answer or tool call begun, has its stream closed, which stops the server generating (`Reply.thinking_cut`).
+- Thinking-off retry: a reply that is all reasoning and no answer (cut at the budget, stopped at the output cap, or empty with only reasoning) is asked again, identically, with Ollama `think: false`. The prompt is unchanged and no nudge is added, so the cached prefix is reused (live: the retry answered in 0.8 s). It is tried once per reply; if the thinking-off answer is still empty, the existing empty-reply nudges take over. A long real answer cut at the output cap still gets the 2.41.1 "smaller pieces" nudge. The REPL prints "reasoning ran N tokens with no answer; asking again with thinking off". Tests in tests/test_think_budget.py.
+
 ## 2.42.1
 - Safety hint (wilbur/directives.py): a `run_bash` command that unbinds/binds/removes a host PCI/USB controller or driver via sysfs, or runs `modprobe -r`, now earns a `host_hw` tool-result hint -- that resets the controller, and a shared one may also carry the keyboard, disks or security keys. It steers to passing the device into a container (`--device`/`--net=host`/cgroup rules) instead and to stopping rather than retrying a failed host-level op. Rides in the tool RESULT, not the system prompt, so the cached prefix and its token budget are untouched (the regex also matches the /sys path inside a `docker run --privileged sh -c '...'`). Added after Wilbur's `xhci unbind` on 2026-10-24 reset USB bus 3 and dropped the Alfa adapters. Test in tests/test_directives.py.
 

@@ -85,6 +85,13 @@ class Config:
     # tokens is ~7 min at 75 tok/s, above the longest real reply measured
     # (23,641 tokens, 2026-10-21).
     num_predict: int = 32768
+    # Reasoning cap per reply, in tokens (0 = none). A thinking model that is
+    # still reasoning past it, with no answer or tool call begun, is cut off
+    # and asked again with thinking off (wilbur.agent). Measured 2026-10-26:
+    # three ~6-minute calls each spent the whole 32k output cap reasoning on a
+    # 30k prompt and came back empty, and the second cap hit ended the run.
+    # 8,192 tokens is ~90 s at the 3090's ~90 tok/s.
+    think_budget_tokens: int = 8192
     # Ollama keep_alive sent on EVERY /api/chat request, so Wilbur's model stays resident between
     # turns without any separate re-arm call (2.39.1: a bare /api/generate re-arm carried no
     # options, so Ollama reloaded the model at its default context and the next chat reloaded it

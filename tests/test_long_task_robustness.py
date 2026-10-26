@@ -39,10 +39,12 @@ def test_empty_reply_retries_are_configurable_and_recover(make_agent):
 
 def test_empty_give_up_with_thinking_surfaces_a_short_summary(make_agent):
     # Retries spent and the reply is still empty, but the model DID reason:
-    # surface a truncated summary (not the wall) and do NOT hard-stop.
+    # surface a truncated summary (not the wall) and do NOT hard-stop. The
+    # first all-reasoning reply is asked again with thinking off (2.43.0);
+    # this one stays empty even then.
     big = "reasoning " * 500          # > 1500 chars
-    a, _ = make_agent([say(""), Reply(content="", tool_calls=[], thinking=big)],
-                      empty_reply_retries=1)
+    thought = Reply(content="", tool_calls=[], thinking=big)
+    a, _ = make_agent([say(""), thought, thought], empty_reply_retries=1)
     seen = _events(a)
     final = a.run("go")
     assert "(reasoning truncated)" in final

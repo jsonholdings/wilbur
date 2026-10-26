@@ -180,6 +180,7 @@ def make_client(config: Any, model: str, ollama_cls: Any = OllamaClient) -> Any:
     if isinstance(client, OllamaClient):
         client.stall_busy_max_s = float(getattr(config, "stall_busy_max_s", 600))
         client.num_predict = int(getattr(config, "num_predict", 0) or 0)
+        client.think_budget = int(getattr(config, "think_budget_tokens", 0) or 0)
         mode = getattr(config, "stall_busy_check", "auto") or "off"
         if mode != "off":
             client.busy_check = ServerActivity(
