@@ -221,3 +221,29 @@ def test_eof_alone_does_not_pause_the_turn(make_agent):
     assert len(client.seen) == 2
     q.put("/queue")                          # control: a real command is pending
     assert box.pending()
+
+
+def test_a_line_the_model_worked_past_does_not_stop_keep_going(make_agent):
+    # 2.43.1: session desktopuser1-1793148787 (2026-10-27) took a line at
+    # message 15, worked ~120 more messages, hit the round cap, and keep-going
+    # stopped with user_interrupt on that long-answered line.
+    agent, client, q = _agent_with_message_during_first_tool(make_agent, wire_inbox=True)
+    agent.run("do the work")
+    assert MSG in _flat(client.seen[1])
+    assert agent.turn_messages_injected == 0
+
+
+def test_a_line_answered_in_the_final_reply_still_wins_over_the_nudge(make_agent):
+    q: "queue.Queue[str | None]" = queue.Queue()
+
+    def approve(*_):
+        q.put(MSG)
+        return Approval.GRANTED
+
+    agent, client = make_agent([say_tool("echo one"), say("ok, README first")], approve=approve)
+    box = Inbox(q)
+    agent.inbox = box
+    agent.ctx.inbox = box
+    agent.run("do the work")
+    assert MSG in _flat(client.seen[1])
+    assert agent.turn_messages_injected == 1

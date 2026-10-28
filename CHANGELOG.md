@@ -3,6 +3,9 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.43.1
+- A line typed mid-turn no longer stops a long run after the model has worked past it. Keep-going treated any line read during the turn as "the user wins over the nudge", even when the model had read it and gone on with tool calls; session desktopuser1-1793148787 (2026-10-27) read a line at message 15, worked ~120 more messages to the round cap, and stopped as `user_interrupt` on that long-answered line. The count now clears when the model replies with a tool call after reading it; a line the final reply answers still stops the run. Tests in tests/test_bounded_message_check.py.
+
 ## 2.43.0
 - Runaway reasoning no longer stalls or ends a run. Measured 2026-10-26 on huihui_ai/qwen3.8-abliterated:27b (Ollama 0.40.2): three calls in a row each ran about 6 minutes, spent the whole 32,768-token output cap in the reasoning channel on a 30k prompt (Ollama saved a 62,602-token prompt+reply), and came back with nothing in the message; the second cap hit ended the run. Live probe the same evening: a one-line "is 1000003 prime?" was still reasoning at 3,000 tokens.
 - Reasoning budget: new config `think_budget_tokens` (default 8192, ~90 s on the 3090; 0 = none). A reply still reasoning past it, with no answer or tool call begun, has its stream closed, which stops the server generating (`Reply.thinking_cut`).

@@ -253,6 +253,10 @@ class Agent:
                 assistant["tool_calls"] = [
                     self._call_message(c) for c in reply.tool_calls
                 ]
+                # The model read any line typed mid-turn before this call and
+                # went on working, so the line is answered: it must not stop
+                # keep-going when the run later ends (2.43.1).
+                self.turn_messages_injected = 0
             self.messages.append(assistant)
             self.on_event("message", {})
 
