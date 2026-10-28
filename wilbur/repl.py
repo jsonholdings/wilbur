@@ -74,13 +74,14 @@ HELP = """  Model
 
   Other
   /help             this list
+  /restart          reload Wilbur (after an update) and resume this session
   /exit             quit"""
 
 
 _SLASH_COMMANDS = (
     "/model", "/search", "/pull", "/context", "/turns", "/continue", "/retry", "/compact", "/tools",
     "/approve", "/team", "/loop", "/keepgoing", "/clear", "/cost", "/queue", "/queue clear", "/agents",
-    "/help", "/exit",
+    "/help", "/restart", "/exit",
 )
 
 
@@ -90,6 +91,9 @@ class Repl:
         self.cwd = cwd
         self.manager = ModelManager(config.base_url)
         self.approve_mode = "ask"
+        # Set by /restart: __main__ re-executes Wilbur on this session once
+        # run() has cleaned up (wilbur.__main__._exec_restart).
+        self.restart_requested = False
         self.stats = {"calls": 0, "in_tokens": 0, "out_tokens": 0, "seconds": 0.0}
         self.last_search: list = []   # results of the most recent /search, for `/pull N`
         # The fake backend runs no model, so it never queues for the GPU: with
@@ -749,13 +753,46 @@ class Repl:
             return self._run_loop()
         finally:
             if getattr(self, "_gp", None) is not None:
-                self._gp.end_session()  # hand the GPU back and unload the model only at exit
+                # hand the GPU back and unload the model only at exit; a
+                # restart keeps it resident so the new process reuses the
+                # cached prompt
+                self._gp.end_session(unload=not self.restart_requested)
             if titled:
                 sys.stdout.write(runstate.restore_title())
                 sys.stdout.flush()
             agents_registry.bind_persist(None)
             self._stop_inbox_watch()
             runstate.remove(self.session_id)  # clean exit: no stale run.json
+
+    def restart_argv(self) -> list[str]:
+        """The command line that resumes this session in a fresh process.
+
+        Runs `python -I -c` with this package's own parent directory put first
+        on sys.path, so the new process imports the code now on disk, from an
+        install or a plain checkout alike (`-m wilbur` under -I needs an
+        install), and the working directory cannot shadow the package. Model,
+        context and URL are passed only when they differ from config.json,
+        since `-m` also sets the subagent model."""
+        package_parent = str(Path(__file__).resolve().parent.parent)
+        launcher = (f"import sys; sys.path.insert(0, {package_parent!r}); "
+                    "from wilbur.__main__ import main; sys.exit(main())")
+        argv = [sys.executable, "-I", "-c", launcher,
+                "-C", str(self.cwd), "--resume", self.session_id,
+                "--approve", self.approve_mode]
+        saved = Config.load()
+        if self.config.model != saved.model:
+            argv += ["-m", self.config.model]
+        if self.config.num_ctx != saved.num_ctx:
+            argv += ["-c", str(self.config.num_ctx)]
+        if self.config.base_url != saved.base_url:
+            argv += ["--url", self.config.base_url]
+        backend = getattr(self.config, "backend", "ollama")
+        if backend != getattr(saved, "backend", "ollama"):
+            argv += ["--backend", backend]
+        fake_script = getattr(self.config, "fake_script", "")
+        if fake_script and fake_script != getattr(saved, "fake_script", ""):
+            argv += ["--fake-script", str(fake_script)]
+        return argv
 
     def _run_loop(self) -> int:
         fake = getattr(self.config, "backend", "ollama") == "fake"
@@ -817,7 +854,19 @@ class Repl:
                     # behaviour "continue" already has, typed either way.
                     line = "continue"
                 else:
-                    if self._command(line) == "exit":
+                    result = self._command(line)
+                    if result == "exit":
+                        return 0
+                    if result == "restart":
+                        self.sessions.save(self.session_id, self.cwd, self.agent.messages,
+                                           self.state, self.config.model)
+                        self.restart_requested = True
+                        dropped = [q for q in list(self._input_q.queue) if q is not None]
+                        if dropped:
+                            print(ui.notice(f"{len(dropped)} queued line(s) dropped by the "
+                                             "restart -- type them again after it"))
+                        print(ui.notice(f"restarting -- session {self.session_id} saved, "
+                                         "resuming it on the reloaded code"))
                         return 0
                     continue
             pasted = self._pasted_output_note(line)
@@ -1178,6 +1227,8 @@ class Repl:
 
         if cmd in {"/exit", "/quit"}:
             return "exit"
+        if cmd == "/restart":
+            return "restart"
         if cmd == "/help":
             print(HELP)
             if self._gp is not None:

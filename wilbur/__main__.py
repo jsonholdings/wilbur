@@ -59,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="JSON script of replies for --backend fake")
     parser.add_argument("--yes", action="store_true",
                         help="approve every tool call without prompting")
+    parser.add_argument("--approve", choices=("ask", "auto-edit", "all"),
+                        help="start with this approval mode (as /approve); /restart passes it on")
     parser.add_argument("--list-models", action="store_true",
                         help="list local models with their agent suitability")
     parser.add_argument("--continue", dest="continue_", action="store_true",
@@ -150,9 +152,47 @@ def main(argv: list[str] | None = None) -> int:
         return rc
 
     repl = Repl(config, args.cwd, restore=restore)
+    if args.approve:
+        repl.approve_mode = args.approve
     if args.yes:
         repl.approve_mode = "all"
-    return repl.run()
+    tty_state = _tty_state()
+    rc = repl.run()
+    if repl.restart_requested:
+        return _exec_restart(repl.restart_argv(), tty_state)
+    return rc
+
+
+def _tty_state():
+    """The terminal's settings before the prompt took it over, so /restart can
+    hand the new process a sane terminal (prompt_toolkit's input thread still
+    holds it in raw mode when run() returns)."""
+    try:
+        import termios
+        return termios.tcgetattr(sys.stdin.fileno()) if sys.stdin.isatty() else None
+    except (ImportError, OSError, ValueError):
+        return None
+
+
+def _exec_restart(argv: list[str], tty_state) -> int:
+    """Replace this process with `argv` (Repl.restart_argv). Only returns when
+    the exec fails; the session is already saved, so say how to resume it."""
+    if tty_state is not None:
+        try:
+            import termios
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, tty_state)
+        except (ImportError, OSError, ValueError):
+            pass
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        os.execv(argv[0], argv)
+    except OSError as exc:
+        resume = argv[argv.index("--resume") + 1]
+        print(ui.error(f"restart failed ({exc}); resume with: wilbur --resume {resume}"),
+              file=sys.stderr)
+        return 1
+    return 0  # pragma: no cover -- execv does not return on success
 
 
 def _pull_suggestion(free_mb: int | None) -> str:

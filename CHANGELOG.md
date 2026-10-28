@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.44.1
+- `/restart` works from a plain checkout, not only an install. 2.44.0 relaunched with `python -I -m wilbur`, which cannot find the package without an install (the public mirror's CI caught it); the new process now runs under `-I -c` with this package's own parent directory first on sys.path, so the working directory still cannot shadow it. The restart tests run the real relaunch command from `/`.
+
+## 2.44.0
+- `/restart`: reload Wilbur after an update without losing the session. It saves the session, ends the process with the model left loaded (the new process reuses the cached prompt), restores the terminal, and re-executes Wilbur on `--resume <session>` so the code now on disk is imported. A /model, /context or URL change made in the session is passed on as a flag; the approval mode goes with it via the new `--approve {ask,auto-edit,all}` option. If the exec fails it prints the `wilbur --resume` line to use. Tests in tests/test_restart.py; checked end to end in a pty with the fake backend.
+
 ## 2.43.1
 - A line typed mid-turn no longer stops a long run after the model has worked past it. Keep-going treated any line read during the turn as "the user wins over the nudge", even when the model had read it and gone on with tool calls; session desktopuser1-1793148787 (2026-10-27) read a line at message 15, worked ~120 more messages to the round cap, and stopped as `user_interrupt` on that long-answered line. The count now clears when the model replies with a tool call after reading it; a line the final reply answers still stops the run. Tests in tests/test_bounded_message_check.py.
 
