@@ -250,7 +250,7 @@ def _ensure_model(config: Config, allow_fallback: bool = True) -> int | None:
     reclaimable = manager.reclaimable_vram_mb()
     print(ui.notice(f"The configured model ({config.model}) isn't installed. Pick one:\n"))
     for i, m in enumerate(capable, 1):
-        fits, why = fit_report(m, config.num_ctx, free_mb, reclaimable)
+        fits, why = fit_report(m, config.num_ctx, free_mb, reclaimable, config.kv_cache_type)
         tag = ui.c("ok      ", ui.GREEN) if fits else ui.c("degraded", ui.RED)
         print(f"  {i:>2}. {tag}  {ui.c(m.name, ui.BOLD):<48} {m.size_gb:5.1f}GB  "
               f"{ui.c(why, ui.GREY)}")
@@ -300,7 +300,7 @@ def _list_models(config: Config) -> int:
     print(ui.notice(f"context {config.num_ctx:,} tokens · "
                     f"{vram_note} · {config.base_url}\n"))
     for m in manager.list_models():
-        fits, why = fit_report(m, config.num_ctx, vram, reclaimable)
+        fits, why = fit_report(m, config.num_ctx, vram, reclaimable, config.kv_cache_type)
         if not m.supports_tools:
             tag, note = ui.c("unusable", ui.RED), "no tool-calling support"
         elif not fits:

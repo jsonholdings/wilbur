@@ -359,9 +359,10 @@ def lease_extra(config: Config, need_gb: float | None = None) -> dict:
     extra: dict = {"submitter": "wilbur"}
     if need_gb is None:
         from .models import ModelManager, model_need_gb
-        info = next((m for m in ModelManager(config.base_url).list_models(detail=False)
+        info = next((m for m in ModelManager(config.base_url).list_models()
                      if m.name == config.model), None)
-        need_gb = None if info is None else model_need_gb(info, config.num_ctx)
+        need_gb = None if info is None else model_need_gb(
+            info, config.num_ctx, getattr(config, "kv_cache_type", "f16"))
     if need_gb is not None and need_gb > 0:
         extra["vram_gb"] = extra["needed_vram_gb"] = round(need_gb, 1)
     return extra

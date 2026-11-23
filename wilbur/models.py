@@ -11,7 +11,7 @@ import json
 import subprocess
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -24,6 +24,8 @@ class ModelInfo:
     families: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
     context_length: int = 0
+    # /api/show `model_info` (GGUF metadata); feeds the KV-cache estimate.
+    model_info: dict = field(default_factory=dict, compare=False, repr=False)
 
     @property
     def size_gb(self) -> float:
@@ -96,6 +98,7 @@ class ModelManager:
                 ctx = [v for k, v in (shown.get("model_info") or {}).items()
                        if k.endswith("context_length")]
                 info.context_length = max(ctx) if ctx else 0
+                info.model_info = dict(shown.get("model_info") or {})
             models.append(info)
         return sorted(models, key=lambda i: i.name)
 
@@ -261,11 +264,58 @@ def gpu_free_mb(index: int = 0) -> int | None:
     return None if vram is None else vram[0]
 
 
-def model_need_gb(info: ModelInfo, num_ctx: int) -> float:
+# Bytes per cached element for each OLLAMA_KV_CACHE_TYPE (llama.cpp ggml
+# block sizes: q8_0 = 34 bytes / 32 values, q4_0 = 18 bytes / 32 values).
+KV_CACHE_BYTES = {"f16": 2.0, "q8_0": 34 / 32, "q4_0": 18 / 32}
+
+
+def kv_elements_per_token(model_info: dict) -> int | None:
+    """K+V elements cached per token over all attention layers, from
+    /api/show `model_info`, or None when the fields are missing.
+
+    Hybrid models (qwen35/qwen35moe) cache KV only in full-attention layers:
+    either `head_count_kv` is a per-layer list (0 = recurrent layer), or it
+    is a scalar and every `full_attention_interval`-th layer attends. MTP
+    `nextn_predict_layers` are excluded, matching llama.cpp's load log
+    (27b: block_count 65, 1 nextn, interval 4 -> 16 KV layers)."""
+    arch = model_info.get("general.architecture")
+    if not arch:
+        return None
+    get = lambda key: model_info.get(f"{arch}.{key}")
+    key_len, val_len = get("attention.key_length"), get("attention.value_length")
+    heads_kv = get("attention.head_count_kv")
+    if not key_len or not val_len or heads_kv is None:
+        return None
+    if isinstance(heads_kv, list):
+        total_heads = sum(int(h) for h in heads_kv)
+    else:
+        blocks = get("block_count")
+        if not blocks:
+            return None
+        layers = int(blocks) - int(get("nextn_predict_layers") or 0)
+        interval = int(get("full_attention_interval") or 0)
+        if interval > 1:
+            layers //= interval
+        total_heads = layers * int(heads_kv)
+    return total_heads * (int(key_len) + int(val_len)) or None
+
+
+def kv_cache_gb(info: ModelInfo, num_ctx: int,
+                kv_cache_type: str = "f16") -> tuple[float, bool]:
+    """(KV-cache GB, measured_from_metadata). `kv_cache_type` must match the
+    server's OLLAMA_KV_CACHE_TYPE. Without metadata, the pre-2.51 heuristic
+    (~0.9 GB per 64K context, a q4_0 figure) is returned unchanged."""
+    elements = kv_elements_per_token(info.model_info)
+    if elements is None:
+        return (num_ctx / 65536) * 0.9, False
+    per_elem = KV_CACHE_BYTES.get(kv_cache_type, KV_CACHE_BYTES["f16"])
+    return elements * num_ctx * per_elem / 1e9, True
+
+
+def model_need_gb(info: ModelInfo, num_ctx: int, kv_cache_type: str = "f16") -> float:
     """Estimated VRAM a model plus its KV cache needs, in GB. Shared by the fit
     check and the gpu-queue lease size, so both judge the same number."""
-    # q4_0 KV cache, empirically ~0.9 GB per 64K context for this model class.
-    return info.size_gb + (num_ctx / 65536) * 0.9
+    return info.size_gb + kv_cache_gb(info, num_ctx, kv_cache_type)[0]
 
 
 def gpu_free_mb_present(config: Any) -> int | None:
@@ -302,14 +352,16 @@ def choose_session_model(config: Any, installed: dict, reclaimable_mb: int = 0,
         free_mb = gpu_free_mb_for(config)
         present_mb = gpu_free_mb_present(config)
     if free_mb is not None:
-        fits, why = fit_report(main_info, config.num_ctx, free_mb, reclaimable_mb)
+        fits, why = fit_report(main_info, config.num_ctx, free_mb, reclaimable_mb,
+                                 getattr(config, "kv_cache_type", "f16"))
         if fits:
             return None
     else:
         why = f"VRAM unknown on cards {config_gpu_indices(config)} (a listed card is missing?)"
     if present_mb is None:
         return None
-    fb_fits, fb_why = fit_report(fb_info, config.num_ctx, present_mb, reclaimable_mb)
+    fb_fits, fb_why = fit_report(fb_info, config.num_ctx, present_mb, reclaimable_mb,
+                               getattr(config, "kv_cache_type", "f16"))
     if not fb_fits:
         return None
     config._fallback_from = (primary, config.subagent_model)
@@ -321,7 +373,7 @@ def choose_session_model(config: Any, installed: dict, reclaimable_mb: int = 0,
 
 
 def fit_report(info: ModelInfo, num_ctx: int, free_mb: int | None,
-               reclaimable_mb: int = 0) -> tuple[bool, str]:
+               reclaimable_mb: int = 0, kv_cache_type: str = "f16") -> tuple[bool, str]:
     """Whether a model plus its KV cache is expected to stay GPU-resident.
 
     `free_mb` is *free* VRAM, not total. `reclaimable_mb` is VRAM held by models
@@ -335,14 +387,17 @@ def fit_report(info: ModelInfo, num_ctx: int, free_mb: int | None,
     """
     if free_mb is None:
         return True, "no GPU detected -- cannot check fit"
-    need_gb = model_need_gb(info, num_ctx)
+    kv_gb, from_metadata = kv_cache_gb(info, num_ctx, kv_cache_type)
+    need_gb = info.size_gb + kv_gb
+    kv_note = (f"KV {kv_gb:.1f}GB {kv_cache_type}" if from_metadata else
+               f"KV {kv_gb:.1f}GB heuristic, no model metadata")
     have_gb = (free_mb + max(0, reclaimable_mb)) / 1024
     if need_gb <= have_gb - 0.4:
-        detail = f"~{need_gb:.1f}GB of {have_gb:.1f}GB available VRAM"
+        detail = f"~{need_gb:.1f}GB ({kv_note}) of {have_gb:.1f}GB available VRAM"
         if reclaimable_mb > 0:
             detail += f" (incl. {reclaimable_mb / 1024:.1f}GB Wilbur will evict)"
         return True, detail
-    msg = (f"~{need_gb:.1f}GB needed but only {have_gb:.1f}GB VRAM available -- "
+    msg = (f"~{need_gb:.1f}GB ({kv_note}) needed but only {have_gb:.1f}GB VRAM available -- "
            f"will spill to CPU (expect a large slowdown). ")
     held_elsewhere = reclaimable_mb == 0 and free_mb is not None
     if held_elsewhere:

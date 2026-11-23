@@ -1467,7 +1467,8 @@ class Repl:
             print()
             for i, m in enumerate(models, 1):
                 current = ui.c(" ← current", ui.ACCENT) if m.name == self.config.model else ""
-                fits, why = fit_report(m, self.config.num_ctx, vram, reclaimable)
+                fits, why = fit_report(m, self.config.num_ctx, vram, reclaimable,
+                                       self.config.kv_cache_type)
                 if not m.supports_tools:
                     tag = ui.c("no tools", ui.RED)
                 elif not fits:
@@ -1519,7 +1520,7 @@ class Repl:
                            "the agent loop."))
             return False
         fits, why = fit_report(info, self.config.num_ctx, gpu_free_mb_for(self.config),
-                               self.manager.reclaimable_vram_mb())
+                               self.manager.reclaimable_vram_mb(), self.config.kv_cache_type)
         if not fits:
             print(ui.error(f"{name}: {why}"))
         return True
@@ -1667,7 +1668,7 @@ class Repl:
                      if m.name == self.config.model), None)
         if info:
             fits, why = fit_report(info, value, gpu_free_mb_for(self.config),
-                                   self.manager.reclaimable_vram_mb())
+                                   self.manager.reclaimable_vram_mb(), self.config.kv_cache_type)
             print((ui.success if fits else ui.error)(f"context {value:,} — {why}"))
         self.agent = self._new_agent()
 

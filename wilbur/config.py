@@ -67,6 +67,10 @@ class Config:
     # with q4_0 KV cache. Going past it silently spills layers to CPU and
     # costs roughly 5x throughput, so it is a hard ceiling, not a suggestion.
     num_ctx: int = 65536
+    # KV-cache element type the Ollama server uses; MUST match the server's
+    # OLLAMA_KV_CACHE_TYPE (unset = f16). Drives the VRAM fit estimate.
+    # One of "f16", "q8_0", "q4_0".
+    kv_cache_type: str = "f16"
     compact_at: float = 0.75          # begin compaction at 75% of num_ctx
     reserve_output: int = 4096        # never let input crowd out the reply
 
@@ -252,6 +256,9 @@ class Config:
                     setattr(cfg, key, value)
         if not cfg.subagent_model:
             cfg.subagent_model = cfg.model
+        if cfg.kv_cache_type not in ("f16", "q8_0", "q4_0"):
+            raise ValueError(f"kv_cache_type {cfg.kv_cache_type!r} in {CONFIG_PATH}: "
+                             "use f16, q8_0 or q4_0 (match OLLAMA_KV_CACHE_TYPE)")
         return cfg
 
     def save(self) -> None:
