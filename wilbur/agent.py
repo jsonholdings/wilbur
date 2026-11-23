@@ -638,6 +638,22 @@ class Agent:
         if call.name in WRITE_TOOLS:
             self.state.writes += 1
 
+        # REPEAT-SUCCESS (2.44.2): the failure ledger only counts FAILED repeats,
+        # so a model reissuing the identical successful call with the identical
+        # output went unflagged (session desktopuser1-1792984315: the same
+        # run_bash 4 times, same "Attempt 1/5..." output). A call that returns
+        # something new is progress, not a repeat, so the ledger is keyed on
+        # signature AND output. On the 3rd identical one, say so.
+        self.state.record_success(signature, result.output)
+        n = self.state.repeated_success(signature, result.output)
+        if n >= 3:
+            self.on_event("repeat_success", {"name": call.name, "count": n})
+            ordinal = f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+            return (result.output +
+                    f"\n\n[harness] This is the {ordinal} time this exact call has "
+                    "returned the identical output. It is not making progress -- "
+                    "change the arguments or approach rather than reissuing it.")
+
         # A successful write is the moment to check the project still builds.
         if call.name in WRITE_TOOLS:
             output = result.output
@@ -693,13 +709,33 @@ class Agent:
         added = max(0, estimate - self._estimate_at_last_prompt)
         return max(estimate, self._last_prompt_tokens + added)
 
+    def _summariser_client(self) -> Any:
+        """The compaction summariser's client: the second Ollama server
+        (`subagent_base_url`, dual-3090-enable) when configured, else the
+        agent's own client. Built once and reused."""
+        url = getattr(self.config, "subagent_base_url", "") or ""
+        if not url or url == self.config.base_url:
+            return self.client
+        cached = getattr(self, "_summariser", None)
+        if cached is None:
+            from dataclasses import replace as _dc_replace
+            sub = _dc_replace(self.config, base_url=url)
+            cached = make_client(
+                sub, getattr(self.config, "subagent_model", "") or self.client_model_name(),
+                ollama_cls=OllamaClient)
+            self._summariser = cached
+        return cached
+
+    def client_model_name(self) -> str:
+        return getattr(self.client, "model", "") or self.config.model
+
     def _maybe_compact(self, force: bool = False, reason: str = "budget") -> None:
         budget = int(self.config.num_ctx * self.config.compact_at) - self.config.reserve_output
         used = self._prompt_size()
         if used < budget and not force:
             return
         before = len(self.messages)
-        self.messages = compact(self.messages, self.client, self.config)
+        self.messages = compact(self.messages, self._summariser_client(), self.config)
         # The last real figure describes the old history; start over.
         self._last_prompt_tokens = 0
         self._estimate_at_last_prompt = 0

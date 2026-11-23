@@ -86,6 +86,37 @@ def test_failure_ledger_counts_repeats_not_duplicates():
     assert "attempted 2 times" in st.briefing()
 
 
+def test_success_repeat_ledger_counts_identical_output():
+    """The failure ledger only counts FAILED repeats; a model reissuing the same
+    successful call with the same output went unflagged. The success ledger is
+    keyed on signature AND output, so a call that returns something new is
+    progress, not a repeat."""
+    st = RunState()
+    sig = "run_bash(command=pytest)"
+    st.record_success(sig, "Attempt 1/5...")
+    assert st.repeated_success(sig, "Attempt 1/5...") == 1
+    st.record_success(sig, "Attempt 1/5...")
+    assert st.repeated_success(sig, "Attempt 1/5...") == 2
+    st.record_success(sig, "Attempt 1/5...")
+    assert st.repeated_success(sig, "Attempt 1/5...") == 3
+    # A different output is a new result, not a repeat of the old one.
+    st.record_success(sig, "Attempt 2/5...")
+    assert st.repeated_success(sig, "Attempt 2/5...") == 1
+    assert st.repeated_success(sig, "Attempt 1/5...") == 3
+    # A different call with the same output is not a repeat either.
+    st.record_success("run_bash(command=pytest -x)", "Attempt 1/5...")
+    assert st.repeated_success("run_bash(command=pytest -x)", "Attempt 1/5...") == 1
+
+
+def test_success_repeat_ledger_round_trips():
+    st = RunState()
+    st.record_success("run_bash(command=pytest)", "Attempt 1/5...")
+    st.record_success("run_bash(command=pytest)", "Attempt 1/5...")
+    back = RunState.from_dict(st.to_dict())
+    assert back.repeated_success("run_bash(command=pytest)", "Attempt 1/5...") == 2
+    assert back.to_dict() == st.to_dict()
+
+
 def test_failure_ledger_is_bounded():
     st = RunState()
     for i in range(50):

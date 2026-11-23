@@ -231,6 +231,30 @@ def gpu_vram_mb(index: int = 0) -> tuple[int, int] | None:
     return cards[index]
 
 
+def config_gpu_indices(config: Any) -> list[int]:
+    """The cards `config.base_url`'s Ollama server can place a model on:
+    `gpu_indices` when set, else the single `gpu_index`."""
+    indices = list(getattr(config, "gpu_indices", None) or [])
+    return indices or [int(getattr(config, "gpu_index", 0))]
+
+
+def gpu_free_mb_for(config: Any) -> int | None:
+    """Free VRAM in MiB across the cards `config` says its Ollama server uses.
+
+    One card: that card's free VRAM. Several (`gpu_indices`): the sum over
+    exactly those cards, because Ollama splits a model too big for one card
+    across every card it can see -- but never cards outside that set (a card
+    pinned to another server is not ours). None if any listed card is
+    missing or nvidia-smi is unreachable: an unknown is not a fit."""
+    indices = config_gpu_indices(config)
+    if len(indices) == 1:
+        return gpu_free_mb(indices[0])
+    cards = all_gpu_vram_mb()
+    if not cards or any(i < 0 or i >= len(cards) for i in indices):
+        return None
+    return sum(cards[i][0] for i in sorted(set(indices)))
+
+
 def gpu_free_mb(index: int = 0) -> int | None:
     """Free VRAM in MiB for one card, or None when nvidia-smi is not reachable."""
     vram = gpu_vram_mb(index)

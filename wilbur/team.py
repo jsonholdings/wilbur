@@ -324,8 +324,8 @@ class TeamOrchestrator:
         if not reviewer_model or reviewer_model == self.config.model:
             return None, ""
         try:
-            from .models import gpu_free_mb
-            free_mb = gpu_free_mb(getattr(self.config, "gpu_index", 0))
+            from .models import gpu_free_mb_for
+            free_mb = gpu_free_mb_for(self.config)
         except Exception:
             free_mb = None
         if free_mb is None:

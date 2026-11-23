@@ -28,7 +28,7 @@ from .inbox import Inbox, poll_interval
 from .config import Config, HISTORY_PATH
 from . import persona as persona_mod
 from . import registry
-from .models import ModelManager, fit_report, gpu_free_mb
+from .models import ModelManager, fit_report, gpu_free_mb, gpu_free_mb_for
 from .tools.base import Approval
 
 # Private build only: the public mirror ships without gpu_priority.py (see
@@ -1460,7 +1460,7 @@ class Repl:
         if not models:
             print(ui.error("no models found"))
             return
-        vram = gpu_free_mb(self.config.gpu_index)
+        vram = gpu_free_mb_for(self.config)
         reclaimable = self.manager.reclaimable_vram_mb()
 
         if not arg:
@@ -1518,7 +1518,7 @@ class Repl:
             print(ui.error(f"{name} does not declare tool support — it cannot drive "
                            "the agent loop."))
             return False
-        fits, why = fit_report(info, self.config.num_ctx, gpu_free_mb(self.config.gpu_index),
+        fits, why = fit_report(info, self.config.num_ctx, gpu_free_mb_for(self.config),
                                self.manager.reclaimable_vram_mb())
         if not fits:
             print(ui.error(f"{name}: {why}"))
@@ -1666,7 +1666,7 @@ class Repl:
         info = next((m for m in self.manager.list_models()
                      if m.name == self.config.model), None)
         if info:
-            fits, why = fit_report(info, value, gpu_free_mb(self.config.gpu_index),
+            fits, why = fit_report(info, value, gpu_free_mb_for(self.config),
                                    self.manager.reclaimable_vram_mb())
             print((ui.success if fits else ui.error)(f"context {value:,} — {why}"))
         self.agent = self._new_agent()

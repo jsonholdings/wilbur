@@ -8,12 +8,12 @@ clamps the output the same way Bash does so one run cannot fill the window.
 from __future__ import annotations
 
 import re
-import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
+from . import contained
 from .base import Approval, ToolContext, ToolResult, clamp, denial_message
 
 
@@ -216,15 +216,14 @@ class RunTests:
         if outcome is not Approval.GRANTED:
             return ToolResult(denial_message("test run", outcome), is_error=True)
 
+        memory_max = getattr(ctx.config, "tool_memory_max", contained.DEFAULT_MEMORY_MAX)
         try:
-            proc = subprocess.run(
-                command, shell=True, cwd=ctx.cwd, capture_output=True,
-                text=True, timeout=timeout, errors="replace",
-            )
-        except subprocess.TimeoutExpired:
+            proc = contained.shell(command, str(ctx.cwd), timeout, memory_max)
+        except contained.Timeout:
             return ToolResult(f"Test run timed out after {timeout}s.", is_error=True)
 
-        body = (proc.stdout or "") + (proc.stderr or "")
+        body = (proc.stdout or "") + (proc.stderr or "") + contained.oom_note(proc.returncode,
+                                                                                memory_max)
 
         if framework == "pytest" and junit_path is not None:
             try:

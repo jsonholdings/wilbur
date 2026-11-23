@@ -9,7 +9,7 @@ from . import __version__, ui
 from .agent import Agent
 from .config import CONFIG_PATH, Config
 from .fake_backend import BACKENDS, FakeBackendError, check_backend
-from .models import ModelManager, fit_report, gpu_free_mb
+from .models import ModelManager, fit_report, gpu_free_mb, gpu_free_mb_for
 from .repl import Repl
 from .tools.base import Approval
 
@@ -281,7 +281,7 @@ def _list_models(config: Config) -> int:
     if not manager.available():
         print(ui.error(f"No Ollama at {config.base_url}."))
         return 1
-    vram = gpu_free_mb(config.gpu_index)
+    vram = gpu_free_mb_for(config)
     reclaimable = manager.reclaimable_vram_mb()
     # "VRAM" alone read as total before the fit check moved to free VRAM; both
     # numbers matter here, since the gap between them is another process.

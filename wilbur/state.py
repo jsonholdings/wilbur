@@ -47,6 +47,21 @@ class Failure:
 
 
 @dataclass
+class SuccessRepeat:
+    """A successful call that keeps returning the identical output.
+
+    The failure ledger only counts FAILED repeats, so a model reissuing the
+    same successful call (same tool, args, output) went unflagged -- session
+    desktopuser1-1792984315 reissued the identical run_bash 4 times. Keyed on
+    call signature AND output: a call that returns something new is progress,
+    not a repeat.
+    """
+    what: str                        # call signature
+    output: str                      # the identical output it keeps returning
+    count: int = 1
+
+
+@dataclass
 class RunState:
     """Everything the agent must not be allowed to forget."""
     objective: str = ""
@@ -61,6 +76,8 @@ class RunState:
     # Circuit breaker (wilbur.agent 2.40.0): consecutive failing tool calls
     # with no successful write/progress in between. Reset to 0 by any success.
     consecutive_tool_failures: int = 0
+    # Successful calls that keep returning the identical output (2.44.2).
+    success_repeats: list[SuccessRepeat] = field(default_factory=list)
 
     # -- plan -------------------------------------------------------------
     def set_plan(self, items: list[dict[str, Any]]) -> None:
@@ -105,6 +122,31 @@ class RunState:
         for f in self.failures:
             if f.what == what.strip():
                 return f.count
+        return 0
+
+    # -- success-repeat ledger --------------------------------------------
+    def record_success(self, what: str, output: str) -> None:
+        """Remember a successful call and the output it produced.
+
+        The failure ledger only counts FAILED repeats, so a model reissuing the
+        same successful call with the same output went unflagged. Keyed on the
+        call signature AND the output: a call that returns something new is
+        progress, not a repeat, so it does not accumulate here.
+        """
+        what, output = what.strip(), output.strip()
+        for s in self.success_repeats:
+            if s.what == what and s.output == output:
+                s.count += 1
+                return
+        self.success_repeats.append(SuccessRepeat(what=what, output=output))
+        if len(self.success_repeats) > MAX_FAILURES:
+            del self.success_repeats[0]
+
+    def repeated_success(self, what: str, output: str) -> int:
+        what, output = what.strip(), output.strip()
+        for s in self.success_repeats:
+            if s.what == what and s.output == output:
+                return s.count
         return 0
 
     def record_verification(self, line: str) -> None:
@@ -160,4 +202,5 @@ class RunState:
         st.verifications = list(data.get("verifications", []))
         st.writes = int(data.get("writes", 0))
         st.last_tool = data.get("last_tool", "")
+        st.success_repeats = [SuccessRepeat(**s) for s in data.get("success_repeats", [])]
         return st

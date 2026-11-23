@@ -35,6 +35,19 @@ class Config:
     # card on a single-GPU host; set alongside `base_url` when a second card
     # (or a second Ollama endpoint bound to it) is added.
     gpu_index: int = 0
+    # Multi-card hosts (BACKLOG `dual-3090-enable`). `gpu_indices` lists every
+    # card the `base_url` Ollama server may spread one model across (Ollama
+    # splits a model that does not fit one card); the fit check then sums free
+    # VRAM over exactly those cards. Empty = just `gpu_index` (today's
+    # single-card behaviour).
+    gpu_indices: list[int] = field(default_factory=list)
+    # Optional second Ollama server (own port, pinned to the other card) for
+    # `task` subagents and the compaction summariser, so they run in parallel
+    # with the main agent instead of queueing behind it. Empty = use
+    # `base_url` (off). `subagent_gpu_index` is that server's card for fit
+    # checks; -1 = same as `gpu_index`.
+    subagent_base_url: str = ""
+    subagent_gpu_index: int = -1
     # Mainstream, tool-capable, and widely pulled -- a public release's shipped
     # default should work for someone who has never heard of this project's
     # abliterated-model history. `wilbur/__main__.py`'s first-run picker
@@ -58,6 +71,10 @@ class Config:
     max_tool_output_chars: int = 24000
     max_tool_output_lines: int = 800
     max_read_lines: int = 1500
+    # Hard memory cap for every run_bash / run_tests command (systemd scope
+    # MemoryMax, swap 0). A model-written infinite allocation hung pop-os
+    # on 2026-11-23; see wilbur/tools/contained.py.
+    tool_memory_max: str = "8G"
 
     # --- agent loop ---
     max_turns: int = 60               # tool-call rounds per user message

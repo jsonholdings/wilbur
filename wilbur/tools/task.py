@@ -113,6 +113,15 @@ class Task:
         # whatever `max_turns` the parent happens to be set to, and mutating
         # it here must never leak back and change the parent's setting.
         sub_config = _dc_replace(ctx.config, max_turns=ctx.config.subagent_max_turns)
+        # dual-3090-enable: a configured second Ollama server (the other card)
+        # takes the subagent, so it runs alongside the main agent's model.
+        sub_url = getattr(ctx.config, "subagent_base_url", "") or ""
+        if sub_url:
+            sub_gpu = getattr(ctx.config, "subagent_gpu_index", -1)
+            sub_config = _dc_replace(
+                sub_config, base_url=sub_url,
+                gpu_index=sub_gpu if sub_gpu >= 0 else sub_config.gpu_index,
+                gpu_indices=[])
 
         # Registered before the thread starts so `/agents` and the spinner
         # can see it the moment it exists, not only once it finishes.

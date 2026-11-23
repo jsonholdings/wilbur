@@ -4,12 +4,12 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import signal
 import subprocess
 import time
 from typing import Any
 
 from ..inbox import DEFAULT_BOUND_S, is_wait_command, poll_interval
+from . import contained
 from .base import Approval, ToolContext, ToolResult, clamp, denial_message
 
 
@@ -108,15 +108,14 @@ class Bash:
         inbox = getattr(ctx, "inbox", None)
         if inbox is not None and is_wait_command(command):
             return self._run_wait(command, ctx, timeout, inbox)
+        memory_max = getattr(ctx.config, "tool_memory_max", contained.DEFAULT_MEMORY_MAX)
         try:
-            proc = subprocess.run(
-                command, shell=True, cwd=ctx.cwd, capture_output=True,
-                text=True, timeout=timeout, errors="replace",
-            )
-        except subprocess.TimeoutExpired:
+            proc = contained.shell(command, str(ctx.cwd), timeout, memory_max)
+        except contained.Timeout:
             return ToolResult(f"Command timed out after {timeout}s.", is_error=True)
 
-        body = (proc.stdout or "") + (proc.stderr or "")
+        body = (proc.stdout or "") + (proc.stderr or "") + contained.oom_note(proc.returncode,
+                                                                                memory_max)
         body = clamp(body.strip(), ctx.config.max_tool_output_chars,
                      ctx.config.max_tool_output_lines)
         if proc.returncode != 0:
@@ -130,9 +129,10 @@ class Bash:
         Ctrl-C) pre-empts it instead of holding the message for the whole
         wait (bounded message check, wilbur.inbox)."""
         step = poll_interval(getattr(ctx.config, "message_check_max_s", DEFAULT_BOUND_S))
-        proc = subprocess.Popen(command, shell=True, cwd=ctx.cwd, text=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                errors="replace", start_new_session=True)
+        memory_max = getattr(ctx.config, "tool_memory_max", contained.DEFAULT_MEMORY_MAX)
+        proc, unit = contained.popen(["/bin/sh", "-c", command], str(ctx.cwd), memory_max,
+                                     text=True, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, errors="replace")
         deadline = time.monotonic() + timeout
         why = ""
         while True:
@@ -143,10 +143,7 @@ class Bash:
                 if not isinstance(exc, subprocess.TimeoutExpired):
                     # Ctrl-C: the wait runs in its own session, so SIGINT
                     # never reached it -- stop it here, not leave an orphan.
-                    try:
-                        os.killpg(proc.pid, signal.SIGTERM)
-                    except OSError:
-                        pass
+                    contained.stop(proc, unit)
                     raise
                 cancel = getattr(ctx, "cancel", None)
                 if inbox.pending():
@@ -156,23 +153,10 @@ class Bash:
                 elif time.monotonic() >= deadline:
                     why = f"Command timed out after {timeout}s."
                 if why:
-                    _stop_group(proc)
+                    contained.stop(proc, unit)
                     return ToolResult(why, is_error=not why.startswith("Wait interrupted"))
         body = (out or "").strip() or "(no output)"
         if proc.returncode != 0:
             return ToolResult(f"exit {proc.returncode}\n{body}", is_error=True)
         return ToolResult(body)
 
-
-def _stop_group(proc: subprocess.Popen) -> None:
-    """SIGTERM the wait's process group, SIGKILL it if it ignores that."""
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(proc.pid, sig)
-        except OSError:
-            proc.kill()
-        try:
-            proc.communicate(timeout=2)
-            return
-        except subprocess.TimeoutExpired:
-            continue

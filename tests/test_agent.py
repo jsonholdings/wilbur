@@ -353,3 +353,40 @@ def test_not_cancelled_runs_normally(make_agent):
     a, client = make_agent([say("all good")])
     result = a.run("hello")
     assert result == "all good"
+
+
+# --------------------------------------------------------------------- #
+# repeat-success loop (2.44.2): the failure ledger only counts FAILED
+# repeats, so a model reissuing the identical successful call with the
+# identical output went unflagged (session desktopuser1-1792984315).
+
+
+def _stub_tool(a, output):
+    """Point read_file at a fixed successful result and return its run."""
+    from wilbur.tools.base import ToolResult
+    result = ToolResult(output=output)
+    a.registry["read_file"].run = lambda args, ctx: result
+    return result
+
+
+def test_third_identical_successful_call_gets_a_harness_note(make_agent):
+    a, _ = make_agent([say("ok")])
+    _stub_tool(a, "Attempt 1/5...")
+    c = call("read_file", path="a.txt")
+    assert "[harness]" not in a._execute(c)
+    assert "[harness]" not in a._execute(c), "the 2nd identical call must not trigger it"
+    third = a._execute(c)
+    assert "[harness]" in third, "the 3rd identical call must be flagged"
+    assert "3rd time" in third
+
+
+def test_third_call_with_different_output_does_not_trigger(make_agent):
+    a, _ = make_agent([say("ok")])
+    c = call("read_file", path="a.txt")
+    _stub_tool(a, "Attempt 1/5...")
+    a._execute(c)
+    _stub_tool(a, "Attempt 2/5...")
+    a._execute(c)
+    _stub_tool(a, "Attempt 3/5...")
+    third = a._execute(c)
+    assert "[harness]" not in third, "a new output is progress, not a repeat"
