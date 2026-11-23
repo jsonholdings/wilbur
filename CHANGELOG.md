@@ -3,6 +3,9 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.49.1
+- Fix: without a user systemd manager (CI, containers) the RLIMIT_AS fallback stops a runaway allocation with `MemoryError` (exit 1) rather than a signal, and `run_bash`/`run_tests` then gave the model no memory-cap hint. The hint now also fires on a non-zero exit whose output contains `MemoryError`. This was the public mirror's 2.49.0 CI failure. Tests: `test_rlimit_fallback_still_tells_the_model`, and `tests/test_contained_commands.py` passes with `WILBUR_NO_SCOPE=1`.
+
 ## 2.49.0
 - Every model-issued command (`run_bash`, `run_tests`, and the A/B bench grader's pytest) now runs memory-capped and tree-killed (`wilbur/tools/contained.py`). Incident 2026-11-23 13:52–14:12: in the full A/B run a model wrote a CSV parser whose `while i <= len(line)` loop appended `""` forever; `subprocess.run(shell=True, timeout=…)` killed only `/bin/sh` on timeout, the python child was orphaned and allocated until RAM and all 28 GiB of swap were gone, the kernel never OOM-killed (zram livelock), and pop-os had to be power-cycled. Commands now run in a transient systemd user scope with `MemoryMax` (new config `tool_memory_max`, default `8G`) and `MemorySwapMax=0`, so the kernel kills them at the cap; on timeout or Ctrl-C the scope is killed by its exact unit name, which also catches children that called `setsid`. Without a user systemd manager it falls back to `RLIMIT_AS` plus the process-group kill. A killed command tells the model it most likely hit the memory cap. Tests: `tests/test_contained_commands.py` (cap kills the leak in seconds, setsid grandchild dies on timeout, RLIMIT fallback, and a control proving the same leak grows past the cap uncapped).
 

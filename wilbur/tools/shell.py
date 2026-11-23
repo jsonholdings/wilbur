@@ -114,8 +114,8 @@ class Bash:
         except contained.Timeout:
             return ToolResult(f"Command timed out after {timeout}s.", is_error=True)
 
-        body = (proc.stdout or "") + (proc.stderr or "") + contained.oom_note(proc.returncode,
-                                                                                memory_max)
+        body = (proc.stdout or "") + (proc.stderr or "")
+        body += contained.oom_note(proc.returncode, memory_max, body)
         body = clamp(body.strip(), ctx.config.max_tool_output_chars,
                      ctx.config.max_tool_output_lines)
         if proc.returncode != 0:

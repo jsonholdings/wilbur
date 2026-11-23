@@ -222,8 +222,8 @@ class RunTests:
         except contained.Timeout:
             return ToolResult(f"Test run timed out after {timeout}s.", is_error=True)
 
-        body = (proc.stdout or "") + (proc.stderr or "") + contained.oom_note(proc.returncode,
-                                                                                memory_max)
+        body = (proc.stdout or "") + (proc.stderr or "")
+        body += contained.oom_note(proc.returncode, memory_max, body)
 
         if framework == "pytest" and junit_path is not None:
             try:

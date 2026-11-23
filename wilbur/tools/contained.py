@@ -136,11 +136,13 @@ def shell(command: str, cwd: str, timeout: float,
     return run(["/bin/sh", "-c", command], cwd, timeout, memory_max)
 
 
-def oom_note(returncode: int, memory_max: str) -> str:
+def oom_note(returncode: int, memory_max: str, output: str = "") -> str:
     """A hint for the model when the command was killed (likely the cap)."""
     # Kernel cgroup OOM sends SIGKILL; systemd's scope OOMPolicy=stop then
-    # SIGTERMs what is left, so /bin/sh itself often ends with -15.
-    if returncode in (-9, -15, 137, 143):
+    # SIGTERMs what is left, so /bin/sh itself often ends with -15. Under the
+    # RLIMIT_AS fallback (no user systemd, e.g. CI) there is no signal: the
+    # program fails its allocation instead (python: MemoryError, exit 1).
+    if returncode in (-9, -15, 137, 143) or (returncode != 0 and "MemoryError" in output):
         return (f"\n[killed: the command was stopped, most likely by the {memory_max} "
                 "memory cap. Look for an unbounded loop or allocation.]")
     return ""

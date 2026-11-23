@@ -94,3 +94,11 @@ def test_rlimit_fallback_caps_without_systemd(tmp_path, monkeypatch):
     proc = contained.shell(LEAK, str(tmp_path), timeout=30, memory_max="300M")
     assert proc.returncode != 0
     assert "MemoryError" in proc.stderr
+
+
+def test_rlimit_fallback_still_tells_the_model(tmp_path, monkeypatch):
+    """CI has no user systemd: the leak dies of MemoryError (exit 1), not a signal,
+    and the model must still be told it hit the cap (2.49.0 mirror CI failure)."""
+    monkeypatch.setattr(contained, "scope_available", lambda: False)
+    result = Bash().run({"command": LEAK, "timeout": 30}, _ctx(tmp_path))
+    assert result.is_error and "memory cap" in result.output
