@@ -9,7 +9,8 @@ from . import __version__, ui
 from .agent import Agent
 from .config import CONFIG_PATH, Config
 from .fake_backend import BACKENDS, FakeBackendError, check_backend
-from .models import ModelManager, fit_report, gpu_free_mb, gpu_free_mb_for
+from .models import (ModelManager, choose_session_model, fit_report, gpu_free_mb,
+                     gpu_free_mb_for)
 from .repl import Repl
 from .tools.base import Approval
 
@@ -147,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"no saved session for {target}. --sessions lists what exists.")
             return 1
 
-    rc = None if backend == "fake" else _ensure_model(config)
+    rc = None if backend == "fake" else _ensure_model(config, allow_fallback=not args.model)
     if rc is not None:
         return rc
 
@@ -205,7 +206,7 @@ def _pull_suggestion(free_mb: int | None) -> str:
     return PULL_SUGGESTIONS[-1][1]  # pragma: no cover -- unreachable, last tier is inf
 
 
-def _ensure_model(config: Config) -> int | None:
+def _ensure_model(config: Config, allow_fallback: bool = True) -> int | None:
     """Make sure `config.model` is actually usable before the REPL starts.
 
     Returns an exit code if the process should stop here (Ollama unreachable,
@@ -225,6 +226,11 @@ def _ensure_model(config: Config) -> int | None:
 
     installed = {m.name: m for m in manager.list_models()}
     if config.model in installed and installed[config.model].supports_tools:
+        if allow_fallback:  # an explicit -m is the user's pick: never swapped
+            capable_now = {n: m for n, m in installed.items() if m.supports_tools}
+            note = choose_session_model(config, capable_now, manager.reclaimable_vram_mb())
+            if note:
+                print(ui.notice(note))
         return None
 
     capable = sorted((m for m in installed.values() if m.supports_tools),

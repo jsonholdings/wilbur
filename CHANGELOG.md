@@ -3,6 +3,9 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.50.0
+- Two-card default with an automatic one-card fallback (owner, 2026-11-23). New config `fallback_model` (empty = off). At session start (`wilbur` and `wilbur loop`, not with an explicit `-m`) the configured `model` is fit-checked over `gpu_indices`; when it does not fit, or its VRAM is unknown because a listed card is missing, and `fallback_model` is installed and fits the cards that are present, the session runs on the fallback (main, and subagents unless `subagent_model` names another model) and prints one line saying which and why. Neither fits: no switch, the existing warnings apply. `Config.save` keeps the configured `model` on disk. `wilbur loop`'s gpu-queue lease now carries the model's estimated need as `params.vram_gb` (gq's lease routing field, becomes `min_vram_gb`) and `params.needed_vram_gb` (admission), so a two-card model spans both gq lanes and a one-card model leases one. Recommended config in MODELS.md / README.md: `model` `huihui_ai/Qwen3.6-abliterated:35b-a3b-q8_0`, `fallback_model` `huihui_ai/qwen3.8-abliterated:27b`, `gpu_indices` `[0, 1]`, `subagent_model` `""`. Tests: `tests/test_model_fallback.py` (both cards fit, second card missing or busy, neither fits, fallback off, save keeps the default, and a control proving the fit check says "does not fit").
+
 ## 2.49.1
 - Fix: without a user systemd manager (CI, containers) the RLIMIT_AS fallback stops a runaway allocation with `MemoryError` (exit 1) rather than a signal, and `run_bash`/`run_tests` then gave the model no memory-cap hint. The hint now also fires on a non-zero exit whose output contains `MemoryError`. This was the public mirror's 2.49.0 CI failure. Tests: `test_rlimit_fallback_still_tells_the_model`, and `tests/test_contained_commands.py` passes with `WILBUR_NO_SCOPE=1`.
 

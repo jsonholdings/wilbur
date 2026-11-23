@@ -54,6 +54,11 @@ class Config:
     # catches the case where this isn't actually installed and offers what is.
     model: str = "qwen3:14b"
     subagent_model: str = ""          # falls back to `model`
+    # 2.50.0: used for this session only when `model` cannot fit the cards in
+    # `gpu_indices` (or their VRAM is unknown, e.g. a card is missing) and this
+    # one does. Empty = off. A one-line notice always says so; never saved
+    # over `model` (see `save`). Recommended two-card config: MODELS.md.
+    fallback_model: str = ""
     temperature: float = 0.15
     top_p: float = 0.9
 
@@ -260,5 +265,13 @@ class Config:
                 data[key] = on_disk[key]
             else:
                 data.pop(key, None)
+        # A session running on `fallback_model` keeps the configured default
+        # on disk: the fallback is a per-session answer to missing VRAM.
+        fallback_from = getattr(self, "_fallback_from", None)
+        if fallback_from and self.fallback_model:
+            if data["model"] == self.fallback_model:
+                data["model"] = fallback_from[0]
+            if data["subagent_model"] == self.fallback_model:
+                data["subagent_model"] = fallback_from[1]
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_PATH.write_text(json.dumps(data, indent=2))

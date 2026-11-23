@@ -349,6 +349,24 @@ class TaskRunner:
 LeaseFn = Callable[[Callable[[], dict], QueueItem], dict]
 
 
+def lease_extra(config: Config, need_gb: float | None = None) -> dict:
+    """The lease's params. 2.50.0: sized with the model's estimated VRAM need,
+    so gq (span_lanes) gives a two-card model both 24 GB lanes and a one-card
+    model one lane. `vram_gb` is gq's routing field for lease clients (it
+    becomes `min_vram_gb`); `needed_vram_gb` is its admission estimate. Both
+    are omitted when the need is unknown (model not listed): gq then falls
+    back to its own estimate, as before 2.50.0."""
+    extra: dict = {"submitter": "wilbur"}
+    if need_gb is None:
+        from .models import ModelManager, model_need_gb
+        info = next((m for m in ModelManager(config.base_url).list_models(detail=False)
+                     if m.name == config.model), None)
+        need_gb = None if info is None else model_need_gb(info, config.num_ctx)
+    if need_gb is not None and need_gb > 0:
+        extra["vram_gb"] = extra["needed_vram_gb"] = round(need_gb, 1)
+    return extra
+
+
 def gq_lease(config: Config, *, admit_timeout: float = 600.0) -> LeaseFn:
     """Each task holds one gpu-queue `external_lease` (FIFO admission: it waits its
     turn and never preempts a running job), heartbeats while it works, unloads
@@ -362,7 +380,7 @@ def gq_lease(config: Config, *, admit_timeout: float = 600.0) -> LeaseFn:
         def unload() -> None:
             ModelManager(config.base_url).unload_all()
         row = gpu_lease.run_leased(work, client, real_kind="wilbur_task", model=config.model,
-                                   why=f"wilbur loop: {item.id}", extra={"submitter": "wilbur"},
+                                   why=f"wilbur loop: {item.id}", extra=lease_extra(config),
                                    admit_timeout=admit_timeout, after_work=unload)
         return row
     return lease
@@ -508,6 +526,13 @@ def loop_main(argv: list[str]) -> int:
     if args.model:
         config.model = args.model
         config.subagent_model = args.model
+    elif config.fallback_model:
+        from .models import ModelManager, choose_session_model
+        manager = ModelManager(config.base_url)
+        installed = {m.name: m for m in manager.list_models() if m.supports_tools}
+        note = choose_session_model(config, installed, manager.reclaimable_vram_mb())
+        if note:
+            print(f"wilbur loop: {note}", file=sys.stderr)
     if args.no_lease:
         lease = no_lease
     else:

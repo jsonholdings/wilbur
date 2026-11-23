@@ -1,2 +1,2 @@
 """Wilbur — a local coding agent for the terminal."""
-__version__ = "2.49.1"
+__version__ = "2.50.0"

@@ -261,6 +261,65 @@ def gpu_free_mb(index: int = 0) -> int | None:
     return None if vram is None else vram[0]
 
 
+def model_need_gb(info: ModelInfo, num_ctx: int) -> float:
+    """Estimated VRAM a model plus its KV cache needs, in GB. Shared by the fit
+    check and the gpu-queue lease size, so both judge the same number."""
+    # q4_0 KV cache, empirically ~0.9 GB per 64K context for this model class.
+    return info.size_gb + (num_ctx / 65536) * 0.9
+
+
+def gpu_free_mb_present(config: Any) -> int | None:
+    """Free VRAM summed over the listed cards that actually exist. Unlike
+    `gpu_free_mb_for` a missing card is skipped, not unknown: this answers
+    "what is left if the second card is gone", for the fallback fit only.
+    None when nvidia-smi is unreachable or no listed card exists."""
+    cards = all_gpu_vram_mb()
+    present = [i for i in sorted(set(config_gpu_indices(config))) if 0 <= i < len(cards)]
+    if not present:
+        return None
+    return sum(cards[i][0] for i in present)
+
+
+def choose_session_model(config: Any, installed: dict, reclaimable_mb: int = 0,
+                         free_mb: int | None = None, present_mb: int | None = None,
+                         probe: bool = True) -> str | None:
+    """2.50.0: switch this session to `config.fallback_model` when `config.model`
+    cannot fit, and say so. Returns the one line to print, or None (no change).
+
+    The main model fails the check when it does not fit OR its VRAM is unknown
+    (a listed card missing, nvidia-smi down). The fallback is used only when it
+    is installed and provably fits the cards that are present; otherwise
+    nothing changes and the usual fit warnings apply. The configured default
+    is never overwritten: `Config.save` restores it (`_fallback_from`)."""
+    fallback = getattr(config, "fallback_model", "") or ""
+    primary = config.model
+    if not fallback or fallback == primary:
+        return None
+    main_info, fb_info = installed.get(primary), installed.get(fallback)
+    if main_info is None or fb_info is None:
+        return None
+    if probe:
+        free_mb = gpu_free_mb_for(config)
+        present_mb = gpu_free_mb_present(config)
+    if free_mb is not None:
+        fits, why = fit_report(main_info, config.num_ctx, free_mb, reclaimable_mb)
+        if fits:
+            return None
+    else:
+        why = f"VRAM unknown on cards {config_gpu_indices(config)} (a listed card is missing?)"
+    if present_mb is None:
+        return None
+    fb_fits, fb_why = fit_report(fb_info, config.num_ctx, present_mb, reclaimable_mb)
+    if not fb_fits:
+        return None
+    config._fallback_from = (primary, config.subagent_model)
+    config.model = fallback
+    if not config.subagent_model or config.subagent_model == primary:
+        config.subagent_model = fallback
+    return (f"Using fallback model {fallback} for this session: {primary} does not fit "
+            f"({why}). Fallback fits: {fb_why}.")
+
+
 def fit_report(info: ModelInfo, num_ctx: int, free_mb: int | None,
                reclaimable_mb: int = 0) -> tuple[bool, str]:
     """Whether a model plus its KV cache is expected to stay GPU-resident.
@@ -276,9 +335,7 @@ def fit_report(info: ModelInfo, num_ctx: int, free_mb: int | None,
     """
     if free_mb is None:
         return True, "no GPU detected -- cannot check fit"
-    # q4_0 KV cache, empirically ~0.9 GB per 64K context for this model class.
-    kv_gb = (num_ctx / 65536) * 0.9
-    need_gb = info.size_gb + kv_gb
+    need_gb = model_need_gb(info, num_ctx)
     have_gb = (free_mb + max(0, reclaimable_mb)) / 1024
     if need_gb <= have_gb - 0.4:
         detail = f"~{need_gb:.1f}GB of {have_gb:.1f}GB available VRAM"
