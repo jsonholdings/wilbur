@@ -112,7 +112,8 @@ class Bash:
         try:
             proc = contained.shell(command, str(ctx.cwd), timeout, memory_max)
         except contained.Timeout:
-            return ToolResult(f"Command timed out after {timeout}s.", is_error=True)
+            return ToolResult(f"Command timed out after {timeout}s. {contained.timeout_hint(timeout)}",
+                              is_error=True)
 
         body = (proc.stdout or "") + (proc.stderr or "")
         body += contained.oom_note(proc.returncode, memory_max, body)

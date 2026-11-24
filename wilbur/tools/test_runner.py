@@ -138,7 +138,7 @@ def _format_pytest_summary(parsed: dict, exit_code: int) -> str:
     return "\n".join(lines)
 
 
-def _format_custom_summary(framework: str, body: str, exit_code: int) -> str:
+def _format_custom_summary(framework: str, body: str, exit_code: int, workdir: str = "") -> str:
     passing = 0
     failing = 0
     for pat in (r'(\d+)\s+passing', r'(\d+)\s+tests?\s+passed'):
@@ -151,8 +151,15 @@ def _format_custom_summary(framework: str, body: str, exit_code: int) -> str:
         if m:
             failing = int(m.group(1))
             break
-    header = (f"tests: {passing} passed, {failing} failed ({framework}) -- "
-              f"per-test file:line detail is not available for this runner")
+    if exit_code != 0 and passing == 0 and failing == 0:
+        # 2.52.1: "0 passed, 0 failed" read as a clean run when the command never ran a test
+        # (wrong cwd -> relative ./venv resolved elsewhere -> "No module named pytest").
+        header = (f"tests: DID NOT RUN ({framework}) -- the command exited {exit_code} "
+                  f"without reporting any test counts; ran in {workdir or '(cwd)'}. "
+                  f"Relative paths resolve from there: pass `cwd` or absolute paths")
+    else:
+        header = (f"tests: {passing} passed, {failing} failed ({framework}) -- "
+                  f"per-test file:line detail is not available for this runner")
     return header + f"\nexit {exit_code}\n\n" + body
 
 
@@ -171,13 +178,24 @@ class RunTests:
                         "description": "Explicit test command override"},
             "path": {"type": "string",
                      "description": "Subdirectory or target to test, default cwd"},
+            "cwd": {"type": "string",
+                    "description": "Directory to run the command in (absolute, or relative to the "
+                                   "session cwd); default the session cwd. A `cd` in an earlier "
+                                   "run_bash does not carry over"},
             "timeout": {"type": "integer", "description": "Seconds, default 120"},
         },
         "required": [],
     }
 
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        root = Path(ctx.cwd)
+        session_root = Path(ctx.cwd)
+        root = session_root
+        if args.get("cwd"):
+            root = Path(str(args["cwd"])).expanduser()
+            if not root.is_absolute():
+                root = session_root / root
+            if not root.is_dir():
+                return ToolResult(f"cwd {root} is not a directory.", is_error=True)
         target = Path(args["path"]).expanduser() if args.get("path") else root
         if not target.is_absolute():
             target = root / target
@@ -218,9 +236,10 @@ class RunTests:
 
         memory_max = getattr(ctx.config, "tool_memory_max", contained.DEFAULT_MEMORY_MAX)
         try:
-            proc = contained.shell(command, str(ctx.cwd), timeout, memory_max)
+            proc = contained.shell(command, str(root), timeout, memory_max)
         except contained.Timeout:
-            return ToolResult(f"Test run timed out after {timeout}s.", is_error=True)
+            return ToolResult(f"Test run timed out after {timeout}s. {contained.timeout_hint(timeout)}",
+                              is_error=True)
 
         body = (proc.stdout or "") + (proc.stderr or "")
         body += contained.oom_note(proc.returncode, memory_max, body)
@@ -239,7 +258,7 @@ class RunTests:
                 except OSError:
                     pass
         else:
-            text = _format_custom_summary(framework, body.strip(), proc.returncode)
+            text = _format_custom_summary(framework, body.strip(), proc.returncode, str(root))
 
         text = clamp(text.strip(), ctx.config.max_tool_output_chars,
                      ctx.config.max_tool_output_lines)

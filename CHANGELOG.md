@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.52.1
+- `run_tests` takes a `cwd` argument (absolute, or relative to the session cwd). Owner session 2026-11-24: a `cd <repo> &&` in an earlier `run_bash` does not carry over, so `run_tests ./venv/bin/python -m pytest` ran from `$HOME`, hit `~/venv` ("No module named pytest") six times, and tripped the tool-failure breaker.
+- A `run_tests` command that exits non-zero without reporting any test counts now reads `tests: DID NOT RUN ... ran in <dir>` instead of `0 passed, 0 failed`, which looked like a clean suite.
+- `run_bash` and `run_tests` timeouts name the timeout used and say that an identical retry will time out again (raise `timeout`, narrow the command, or run it in the background), after three identical 60 s retries on a slow suite in the same session.
+
+
 ## 2.52.0
 - Project-directory awareness (owner session 2026-11-23: the laptop launcher starts `wilbur` in `$HOME`, so the model ran `./venv/bin/python -m pytest` against `~/venv` and the project's WILBUR.md never loaded). New `wilbur/projectdir.py`.
 - Last project: the git root is recorded in `~/.local/state/wilbur/last-project` (env `WILBUR_LAST_PROJECT`) at startup inside a repo, from an absolute `cd <dir> &&`/`cd <dir>;` prefix in `run_bash`/`run_tests`, and by the new `/cd <dir>` REPL command, which also moves the session cwd and reloads the project's instructions. An interactive start in `$HOME` with no `-C` returns to the recorded dir and prints one line; new `--here` stays. `-p` and `wilbur loop` never switch. `$HOME` itself is never recorded.

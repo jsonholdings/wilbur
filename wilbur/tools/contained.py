@@ -43,6 +43,14 @@ class Timeout(Exception):
     pass
 
 
+def timeout_hint(timeout: int) -> str:
+    """2.52.1: a model that hits the timeout tends to resend the identical call until the
+    tool-failure breaker stops it (seen 2026-11-24, 3x run_bash at timeout=60 on a slow suite)."""
+    return (f"Retrying the same call will time out again: raise `timeout` (it was {timeout}s; "
+            f"a full test suite may need 600), narrow the command to fewer tests, or run it in "
+            f"the background and poll.")
+
+
 def _bytes(size: str) -> int:
     units = {"K": 1 << 10, "M": 1 << 20, "G": 1 << 30, "T": 1 << 40}
     size = str(size).strip().upper()
