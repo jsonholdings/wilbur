@@ -3,6 +3,9 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.51.1
+- Fix: a tripped tool-failure circuit breaker now resets when the user types a message. `consecutive_tool_failures` carried over between user turns, so after a trip, `/continue` or any new instruction tripped the breaker again on the model's first failing call, despite the stop message promising "a fresh budget" (owner session 2026-11-23: counts 7, 8, 9 on three replies). New `Agent.begin_user_turn()`, called by the REPL for each typed line; keep-going nudges do not reset it, and the per-call ledger is kept, so an identical failing call stays blocked. Tests: `tests/test_breaker_resets_on_user_turn.py` (fresh budget after a trip, the breaker still trips within one turn, the REPL calls the reset, and a control reproducing the re-trip without it).
+
 ## 2.51.0
 - KV-aware VRAM fit. `model_need_gb`/`fit_report` (and so the session fallback check and the `wilbur loop` gpu-queue lease size) now compute the KV cache from `/api/show` `model_info`: full-attention layers only for hybrids (per-layer `head_count_kv` list, or `block_count` - `nextn_predict_layers` over `full_attention_interval`), x `head_count_kv` x (`key_length` + `value_length`) x `num_ctx` x bytes per element. New config `kv_cache_type` (`f16` default, `q8_0`, `q4_0`; any other value is rejected at load) must match the server's `OLLAMA_KV_CACHE_TYPE`. Models without the metadata keep the old q4_0 heuristic (~0.9 GB per 64K), and the fit report names which one it used. The old heuristic under-counted the 27b's f16 KV at 64K by about 4.7x (0.9 vs 4.3 GB). Tests: `tests/test_kv_cache_fit.py` (both measured llama.cpp KV sizes within 10%, 27b at 131072 fits one card with q8_0 and not with f16, 35b-a3b at 131072 q8_0 fits two cards, heuristic fallback, and a control proving the old heuristic underestimates the 27b).
 

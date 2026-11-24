@@ -185,6 +185,14 @@ class Agent:
 
     # ------------------------------------------------------------------ #
 
+    def begin_user_turn(self) -> None:
+        """A message the user typed (not a keep-going nudge) starts with a
+        fresh tool-failure budget, as the breaker's stop message promises.
+        The per-call ledger is kept, so an identical failing call stays blocked
+        (2.51.1; owner 2026-11-23: the breaker re-tripped on every reply)."""
+        self.state.consecutive_tool_failures = 0
+        self.tool_circuit_tripped = False
+
     def run(self, user_input: str) -> str:
         # The objective is captured verbatim once and never rewritten. Later
         # turns re-read it from state, not from a compacted transcript.

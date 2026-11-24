@@ -894,6 +894,7 @@ class Repl:
             self._set_runstate(runstate.WORKING)
             try:
                 with spinner:
+                    self.agent.begin_user_turn()
                     reply = self.agent.run(line)
                     reply = self._keep_going(reply)
             except KeyboardInterrupt:
