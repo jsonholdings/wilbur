@@ -51,7 +51,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="run a single prompt non-interactively and print the result")
     parser.add_argument("-m", "--model", help="model to use for this run")
     parser.add_argument("-c", "--context", type=int, help="context window in tokens")
-    parser.add_argument("-C", "--cwd", default=os.getcwd(), help="working directory")
+    parser.add_argument("-C", "--cwd", default=None, help="working directory")
+    parser.add_argument("--here", action="store_true",
+                        help="stay in $HOME instead of returning to the last project")
     parser.add_argument("--url", help="Ollama base URL")
     parser.add_argument("--backend", choices=BACKENDS,
                         help="model backend: ollama (default) or fake (scripted "
@@ -78,6 +80,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"wilbur {__version__}")
     args = parser.parse_args(argv)
 
+    explicit_dir = args.cwd is not None
+    if args.cwd is None:
+        args.cwd = os.getcwd()
     config = Config.load()
     if args.url:
         config.base_url = args.url
@@ -135,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
             obj = (r["objective"] or [""])[0][:60]
             print(f"  {r['id']:<34} {when}  {r['turns']:>4} msgs  {obj}")
         return 0
+
+    _enter_project(args, explicit_dir)
 
     restore = None
     if args.resume or args.continue_:
@@ -313,11 +320,31 @@ def _list_models(config: Config) -> int:
     return 0
 
 
+def _global_instructions() -> str:
+    from . import projectdir
+    return projectdir.global_instructions()
+
+
+def _enter_project(args: argparse.Namespace, explicit_dir: bool) -> None:
+    """Interactive start only (2.52.0): a launch in $HOME returns to the last
+    project; a launch inside a repo records it as the last project."""
+    from . import projectdir
+    target = projectdir.startup_dir(args.cwd, explicit_dir=explicit_dir, here=args.here)
+    if target is not None:
+        os.chdir(target)
+        args.cwd = str(target)
+        print(ui.notice(f"started in $HOME: switched to the last project {target} "
+                        "(run `wilbur --here` to stay in $HOME)"))
+        return
+    projectdir.record_last_project(args.cwd)
+
+
 def _oneshot(config: Config, cwd: str, prompt: str, auto: bool) -> int:
     agent = Agent(
         config, cwd,
         approve=lambda tool, detail: Approval.GRANTED if auto else Approval.DENIED,
         on_event=_print_event,
+        system_extra=_global_instructions(),
     )
     # A one-shot always gets a NEW session id: inheriting the directory's latest
     # session would let a script silently pick up a stale plan. Saved in

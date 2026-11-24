@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from . import verify, worktree
+from . import projectdir, verify, worktree
 from .agent import Agent
 from .config import Config
 from .tools.base import Approval
@@ -324,7 +324,9 @@ class TaskRunner:
         try:
             agent = Agent(self.config, wt_path,
                           approve=lambda tool, detail: Approval.GRANTED,
-                          on_event=self.on_event, system_extra=LOOP_SYSTEM,
+                          on_event=self.on_event,
+                          system_extra="\n\n".join(
+                              b for b in (projectdir.global_instructions(), LOOP_SYSTEM) if b),
                           cancel=self.cancel)
             if item.test_commands:
                 def check() -> tuple[bool | None, str]:

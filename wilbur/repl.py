@@ -27,6 +27,7 @@ from .llm import ModelNotResponding
 from .inbox import Inbox, poll_interval
 from .config import Config, HISTORY_PATH
 from . import persona as persona_mod
+from . import projectdir
 from . import registry
 from .models import ModelManager, fit_report, gpu_free_mb, gpu_free_mb_for
 from .tools.base import Approval
@@ -68,6 +69,7 @@ HELP = """  Model
   /compact          summarise older history now (shows tokens before -> after)
   /clear            start a fresh conversation
   /cost             tokens and timing for this session
+  /cd <dir>         move the session to another project directory (reloads its WILBUR.md)
   /queue            show commands typed and queued during the current turn
   /queue clear      drop everything queued, without cancelling the live turn
   /agents           list in-flight and recent subagents (role, status, elapsed)
@@ -80,7 +82,7 @@ HELP = """  Model
 
 _SLASH_COMMANDS = (
     "/model", "/search", "/pull", "/context", "/turns", "/continue", "/retry", "/compact", "/tools",
-    "/approve", "/team", "/loop", "/keepgoing", "/clear", "/cost", "/queue", "/queue clear", "/agents",
+    "/approve", "/team", "/loop", "/keepgoing", "/clear", "/cost", "/cd", "/queue", "/queue clear", "/agents",
     "/help", "/restart", "/exit",
 )
 
@@ -218,12 +220,14 @@ class Repl:
             self._unread_written = since
 
     def _system_extra(self) -> str:
-        """Persona first, then the project's own instructions.
+        """Persona, then global ~/.config/wilbur/WILBUR.md, then the project's
+        own instructions.
 
         Order matters: a project's CLAUDE.md is the more specific instruction
         and should be the last thing the model reads before the conversation.
         """
-        blocks = [persona_mod.system_extra(getattr(self.config, "persona", "wilbur"))]
+        blocks = [persona_mod.system_extra(getattr(self.config, "persona", "wilbur")),
+                  projectdir.global_instructions()]
         project = self._project_instructions()
         if project:
             blocks.append(project)
@@ -1238,6 +1242,8 @@ class Repl:
             self._override_command()
         elif cmd == "/model":
             self._model_command(arg)
+        elif cmd == "/cd":
+            self._cd_command(arg)
         elif cmd == "/search":
             self._search(arg)
         elif cmd == "/pull":
@@ -1292,6 +1298,30 @@ class Repl:
         else:
             print(ui.error(f"unknown command {cmd}. /help for the list."))
         return None
+
+    def _cd_command(self, arg: str) -> None:
+        """/cd <dir>: move the session to another project (tools, project
+        instructions and the recorded last project all follow)."""
+        if not arg:
+            print(ui.notice(f"cwd is {self.cwd}. /cd <dir> to change it."))
+            return
+        target = Path(os.path.expanduser(arg))
+        if not target.is_absolute():
+            target = Path(self.cwd) / target
+        target = target.resolve()
+        if not target.is_dir():
+            print(ui.error(f"/cd: {target} is not a directory"))
+            return
+        self.cwd = str(target)
+        self.agent.cwd = self.cwd
+        self.agent.ctx.cwd = self.cwd
+        self.agent.set_system_extra(self._system_extra())
+        recorded = projectdir.record_last_project(target)
+        project = self._project_instructions()
+        loaded = project.split(":", 1)[0] if project else ""
+        print(ui.notice(f"cwd is now {target}"
+                        + (f" ({loaded.lower()})" if loaded else "")
+                        + ("; recorded as the last project" if recorded else "")))
 
     # ---------------------------------------------------------------- #
 

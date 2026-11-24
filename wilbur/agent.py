@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from .config import Config
 from .context import CHARS_PER_TOKEN, estimate_tokens, compact
-from . import directives
+from . import directives, projectdir
 from .directives import tool_rules_for
 from .fake_backend import make_client
 from .llm import OllamaClient, ToolCall
@@ -180,6 +180,7 @@ class Agent:
         # PATH probe cached per process, so the prefix never changes mid-session.
         rules = tool_rules_for(set(registry))
         system = SYSTEM_PROMPT + (f"\n\n{rules}" if rules else "")
+        self._system_base = system
         system += f"\n\n{system_extra}" if system_extra else ""
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
 
@@ -568,6 +569,26 @@ class Agent:
         return msg
 
     def _execute(self, call: ToolCall) -> str:
+        text = self._execute_tool(call)
+        if call.name in ("run_bash", "run_tests"):
+            # 2.52.0: a shell call that `cd`s into a repo marks it as the last
+            # project, and a `No module named X` gets the interpreter/venv facts.
+            command = str((call.arguments or {}).get("command", "") or "")
+            projectdir.note_command(command)
+            hint = projectdir.module_hint(command, text, str(self.ctx.cwd))
+            if hint:
+                text += "\n\n" + hint
+        return text
+
+    def set_system_extra(self, system_extra: str) -> None:
+        """Rebuild the system message (after /cd changes the project)."""
+        system = self._system_base + (f"\n\n{system_extra}" if system_extra else "")
+        if self.messages and self.messages[0].get("role") == "system":
+            self.messages[0]["content"] = system
+        else:
+            self.messages.insert(0, {"role": "system", "content": system})
+
+    def _execute_tool(self, call: ToolCall) -> str:
         tool = self.registry.get(call.name)
         signature = f"{call.name}({self._arg_signature(call)})"
         if tool is None:

@@ -3,6 +3,13 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.52.0
+- Project-directory awareness (owner session 2026-11-23: the laptop launcher starts `wilbur` in `$HOME`, so the model ran `./venv/bin/python -m pytest` against `~/venv` and the project's WILBUR.md never loaded). New `wilbur/projectdir.py`.
+- Last project: the git root is recorded in `~/.local/state/wilbur/last-project` (env `WILBUR_LAST_PROJECT`) at startup inside a repo, from an absolute `cd <dir> &&`/`cd <dir>;` prefix in `run_bash`/`run_tests`, and by the new `/cd <dir>` REPL command, which also moves the session cwd and reloads the project's instructions. An interactive start in `$HOME` with no `-C` returns to the recorded dir and prints one line; new `--here` stays. `-p` and `wilbur loop` never switch. `$HOME` itself is never recorded.
+- `No module named X` hint: a `run_bash`/`run_tests` result containing it gets up to 3 `[harness]` lines naming the interpreter, the cwd, and any `.venv`/`venv`/`env` python under the cwd or its git root, with the `-m pip install X` line for it.
+- Global instructions: `~/.config/wilbur/WILBUR.md` (env `WILBUR_GLOBAL_INSTRUCTIONS`, first 6000 chars) is loaded into every session's system prompt (REPL, `-p`, `wilbur loop`), ordered persona -> global -> project.
+- Tests: `tests/test_projectdir.py` (switch only from `$HOME`, controls for `--here`, `-C`, a non-`$HOME` cwd and `-p`; hint absent without the error; global block absent without the file and ordered before the project's when present). The suite redirects both new paths into its temp dir.
+
 ## 2.51.1
 - Fix: a tripped tool-failure circuit breaker now resets when the user types a message. `consecutive_tool_failures` carried over between user turns, so after a trip, `/continue` or any new instruction tripped the breaker again on the model's first failing call, despite the stop message promising "a fresh budget" (owner session 2026-11-23: counts 7, 8, 9 on three replies). New `Agent.begin_user_turn()`, called by the REPL for each typed line; keep-going nudges do not reset it, and the per-call ledger is kept, so an identical failing call stays blocked. Tests: `tests/test_breaker_resets_on_user_turn.py` (fresh budget after a trip, the breaker still trips within one turn, the REPL calls the reset, and a control reproducing the re-trip without it).
 
