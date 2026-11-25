@@ -3,6 +3,11 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.55.1
+- Bench: a `run_tests` call that ran the suite and reported failing or erroring tests is counted in a new per-row `red_test_runs` field, not in `tool_errors`. It is the model's red/green loop, not a broken tool call. Parity round 3 found that most "tool errors" on `12_json_deep_merge` were red test runs, which inflated the G3 error rate. Pytest and other runners' summaries are recognised; a run that could not run (`DID NOT RUN`, timeout, bad cwd, denial, unparseable output) is still a tool error. `bench/runner.py` `is_red_test_run`.
+- Tests: `tests/test_bench_isolation.py` (pytest red and collection-error runs, a jest red run, controls: a green run, `DID NOT RUN`, a runner-missing error and the same text from `run_bash` stay tool errors).
+
+
 ## 2.55.0
 - Untested "done" guard (parity G4, bench `12_json_deep_merge` 4 of 8 reps: a shallow-copy fix reported as verified on the model's own `python -c` check while nested dicts were still mutated). When a call wrote code files and no test ran after the last write (`run_tests`, a test command in `run_bash`, or the harness's own project check), a reply claiming fixed/verified/working/passing/done gets one `[harness]` nudge per call: run the sibling tests it names (`test_x.py`, `x_test.py`, `tests/test_x.py`), or the project's check, or write a pytest test for the stated requirement and run it. Docs-only writes and replies without a claim are untouched; `verify_done_claims: false` turns it off. `wilbur/doneclaim.py` `untested_done_nudge`.
 - Contained commands: `systemd-run` gets `--expand-environment=no`. Newer systemd-run expands `${VAR}` and `$$` in `--scope` commands (its man page says that default is changing), so `echo $$` became `$`. This was the public mirror CI failure (red 2.44.1-2.54.0, `test_timeout_kills_detached_grandchild`), and any host with such a systemd mangled every `$` in Wilbur's shell commands. A systemd-run without the option fails the scope probe and falls back to RLIMIT.
