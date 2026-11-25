@@ -154,3 +154,69 @@ def tick_all(state: RunState) -> int:
             item.status = "completed"
             n += 1
     return n
+
+
+# --- Parity G4: "fixed/verified" after a code change with no test run since ---
+# Bench 2026-11-25, `12_json_deep_merge` (4 of 8 reps): a shallow-copy fix was
+# reported as verified on the strength of the model's own `python -c` check,
+# while nested dicts were still mutated. The claim, not the code, is the tell.
+_FIX_CLAIM = re.compile(
+    r"\b(fixed|verified|resolved|(now )?works( now| correctly)?|is (now )?working|"
+    r"implemented|(tests?|checks?) (now )?pass(es|ing)?)\b", re.IGNORECASE)
+_CODE_SUFFIXES = (".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".go", ".rs",
+                  ".c", ".h", ".cc", ".cpp", ".hpp", ".java", ".kt", ".cs", ".rb",
+                  ".php", ".sh", ".lua", ".swift", ".scala")
+
+
+def is_code_path(path: str) -> bool:
+    return str(path).lower().endswith(_CODE_SUFFIXES)
+
+
+def claims_fixed(reply: str) -> bool:
+    return bool(_FIX_CLAIM.search(reply or "")) or claims_done(reply) or claims_tests_pass(reply)
+
+
+def sibling_tests(cwd: str, written: list[str]) -> list[str]:
+    """Existing test files for the modules written (tests/test_x.py, test_x.py, x_test.py)."""
+    root = Path(cwd)
+    found: list[str] = []
+    for path in written:
+        p = Path(path)
+        stem, suffix = p.stem, p.suffix
+        if stem.startswith("test_") or stem.endswith("_test"):
+            candidates = [p]
+        else:
+            parent = p.parent
+            candidates = [parent / f"test_{stem}{suffix}", parent / f"{stem}_test{suffix}",
+                          parent / "tests" / f"test_{stem}{suffix}",
+                          Path("tests") / f"test_{stem}{suffix}"]
+        for cand in candidates:
+            full = cand if cand.is_absolute() else root / cand
+            if full.is_file():
+                rel = str(cand)
+                if rel not in found:
+                    found.append(rel)
+    return found
+
+
+def untested_done_nudge(reply: str, written: list[str], cwd: str, enabled: bool = True) -> str | None:
+    """The [harness] nudge when code changed, no test ran since, and the reply
+    claims the work is fixed/verified/passing; else None."""
+    if not enabled or not written or not claims_fixed(reply):
+        return None
+    lines = ["[harness] You changed code (" + ", ".join(written[:5]) +
+             ") and no test ran after that change, but your reply says it is "
+             "fixed/verified/passing. A quick script of your own is not verification."]
+    tests = sibling_tests(cwd, written)
+    found = verify.detect(cwd)
+    if tests:
+        lines.append("Existing tests for the changed code: " + ", ".join(tests) +
+                     ". Run them now with run_tests.")
+    elif found is not None:
+        lines.append(f"This project's check is `{found.label}`. Run it now with run_tests.")
+    else:
+        lines.append("No project tests were found. Write a small pytest test that "
+                     "checks the exact requirement the user stated (including edge "
+                     "cases such as nested values), then run the tests with run_tests.")
+    lines.append("Report the real result: if it fails, fix the code before you answer.")
+    return "\n".join(lines)

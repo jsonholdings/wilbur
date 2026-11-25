@@ -31,7 +31,7 @@ _ALWAYS_PROTECTED = {0: "0 (the shell's whole process group)",
 _PKILL_VALUE_OPTS = frozenset({"-s", "--signal", "-g", "--pgroup", "-G", "--group",
                                "-P", "--parent", "-t", "--terminal", "-F", "--pidfile",
                                "--session", "--ns", "--nslist", "-O", "--older",
-                               "-y", "--younger", "-n"})
+                               "-y", "--younger"})
 _USER_OPTS = frozenset({"-u", "--user", "-U", "--uid"})
 REFUSAL = (
     "Refused without running: `{cmd}` would signal {what}. Killing PID 1, every "

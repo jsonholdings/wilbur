@@ -83,7 +83,13 @@ def _unit_name() -> str:
 def wrap(argv: list[str], memory_max: str, unit: str | None) -> list[str]:
     if unit is None:
         return argv
+    # --expand-environment=no: systemd-run documents that --scope will start
+    # expanding ${VAR}/$$ in the command by default, as newer releases do.
+    # The public mirror's CI (GitHub runner) turned `echo $$` into `$` and
+    # was red from 2.44.1 to 2.54.0. A host whose systemd-run predates the
+    # option (< 246) fails the scope_available() probe and falls back to RLIMIT.
     return ["systemd-run", "--user", "--scope", "--quiet", "--collect",
+            "--expand-environment=no",
             f"--unit={unit}", "-p", f"MemoryMax={memory_max}",
             "-p", "MemorySwapMax=0", "--", *argv]
 

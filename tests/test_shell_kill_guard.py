@@ -97,3 +97,9 @@ def test_control_kill_of_own_child_still_runs(ctx):
         if child.poll() is None:
             child.kill()
             child.wait()
+
+
+def test_pkill_newest_flag_takes_no_value():
+    """`pkill -n` means newest, not an option with a value (verifier, 2.54.0):
+    the pattern after it is still checked."""
+    assert kill_refusal(f"pkill -n {_own_comm()}") is not None

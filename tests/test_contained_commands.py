@@ -122,3 +122,21 @@ def test_scope_probe_uses_the_same_argv_as_real_commands(monkeypatch):
     real = contained.wrap(["true"], "64M", "u")
     strip = lambda a: [x for x in a if not x.startswith("--unit=")]
     assert strip(probe) == strip(real)
+
+
+def test_wrap_disables_systemd_run_env_expansion():
+    """Newer systemd-run expands ${VAR} and $$ in --scope commands; the mirror CI
+    runner turned `echo $$` into `$` (red 2.44.1-2.54.0). The shell, not
+    systemd-run, must see the command."""
+    argv = contained.wrap(["/bin/sh", "-c", "echo $$ ${HOME}"], "64M", "u")
+    assert "--expand-environment=no" in argv
+    assert argv.index("--expand-environment=no") < argv.index("--")
+
+
+def test_dollar_reaches_the_shell_unexpanded(tmp_path):
+    """End to end through whichever path this host uses (scope or RLIMIT)."""
+    result = Bash().run({"command": "echo pid=$$ lit='$$' brace='${HOME}'"}, _ctx(tmp_path))
+    assert not result.is_error, result.output
+    assert "lit=$$ brace=${HOME}" in result.output
+    pid = result.output.split("pid=", 1)[1].split()[0]
+    assert pid.isdigit()

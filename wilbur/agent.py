@@ -219,6 +219,10 @@ class Agent:
         # Test commands run in this call (the model's or the harness's own):
         # the claims guard (wilbur.doneclaim) reads it.
         self.turn_test_runs = 0
+        # Code files written since the last test run in this call, and whether
+        # the one untested-"done" nudge (wilbur.doneclaim, parity G4) was sent.
+        self.untested_code_writes: list[str] = []
+        untested_done_nudged = False
         # Lines the user typed that were read mid-turn (wilbur.inbox): keep-going
         # treats them like a line still queued, so they win over the nudge.
         self.turn_messages_injected = 0
@@ -364,6 +368,20 @@ class Agent:
                         continue
                     final = content
                     break
+
+                # Parity G4 (bench 12_json_deep_merge): code changed, no test
+                # ran since, and the reply says fixed/verified/passing. One
+                # nudge per call to run the real tests before the answer stands.
+                if not untested_done_nudged:
+                    from .doneclaim import untested_done_nudge
+                    nudge = untested_done_nudge(
+                        content, self.untested_code_writes, self.cwd,
+                        enabled=getattr(self.config, "verify_done_claims", True))
+                    if nudge:
+                        untested_done_nudged = True
+                        self.on_event("untested_done", {"files": list(self.untested_code_writes)})
+                        self.messages.append({"role": "user", "content": nudge})
+                        continue
 
                 # A normal plain reply ends the turn.
                 self._big_content_streak = 0
@@ -533,6 +551,7 @@ class Agent:
         passed, output = verify.run(check, self.cwd)
         if passed is not None:
             self.turn_test_runs = getattr(self, "turn_test_runs", 0) + 1
+            self.untested_code_writes = []
         line = verify.summarise(check, passed, output)
         self.state.record_verification(line.splitlines()[0])
         if passed is False:
@@ -642,10 +661,12 @@ class Agent:
 
         if call.name == "run_tests":
             self.turn_test_runs = getattr(self, "turn_test_runs", 0) + 1
+            self.untested_code_writes = []
         elif call.name == "run_bash":
             from .doneclaim import is_test_command
             if is_test_command(str((call.arguments or {}).get("command", ""))):
                 self.turn_test_runs = getattr(self, "turn_test_runs", 0) + 1
+                self.untested_code_writes = []
 
         # A tool that failed is a dead end worth remembering. Local models will
         # otherwise reissue the identical call; the ledger lets the next
@@ -666,6 +687,10 @@ class Agent:
         self.state.last_tool = signature
         if call.name in WRITE_TOOLS:
             self.state.writes += 1
+            from .doneclaim import is_code_path
+            written = str((call.arguments or {}).get("path", ""))
+            if is_code_path(written) and written not in getattr(self, "untested_code_writes", []):
+                self.untested_code_writes = getattr(self, "untested_code_writes", []) + [written]
 
         # REPEAT-SUCCESS (2.44.2): the failure ledger only counts FAILED repeats,
         # so a model reissuing the identical successful call with the identical
