@@ -3,6 +3,11 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.57.1
+- Bench-harness correctness (parity G6 verifier findings): `36_long_context_needle`'s hidden test now compares every function except the one SKU under repair (a per-function digest), so a behaviourally-equivalent rewrite such as `(TAX + 1)` is accepted while any change to another function is still caught -- it no longer pins the whole file's sha256. `37_slow_build_step`'s `build.sh` stamps a nonce derived from `totals.py`, and the hidden test requires it, so a hand-written `report.txt` (which the prompt forbids) fails even with the right mean. The quick A/B task count is derived from the task tree (`bench.ab_compare.task_count`, `quick.all_task_dirs`) instead of the literal 35, so the 41-task suite is counted correctly in `QUICK_TASK_COUNT`, `QUICK_MIN_N` and `estimate()`.
+- Tests: `tests/test_bench_g6_tasks.py` adds the equivalent-fix-passes / other-function-fails cases (36), the hand-written-report-fails / built-report-passes cases (37), and a derived-count assertion.
+
+
 ## 2.57.0
 - Bench coverage (parity G6): six tasks for areas the suite did not measure. `36_long_context_needle` (one wrong function among 2,400 in a ~300 KB module; every other function must stay byte-identical), `41_long_log_needle` (the one 500 among 6,000 log lines), `37_slow_build_step` (a fix that only counts once a ~25 s `build.sh` has regenerated its output), `38_wilbur_md_rules` (a new function that must follow the project's WILBUR.md rules), `39_verify_before_done` (a visible test that passes on a partial fix, hidden edge cases that do not) and `40_multi_step_change` (rename, new parameter and caller update in one request). The full suite is now 41 tasks, so a full A/B run takes about 25 s more per rep. These are not yet measured on a model.
 - Tests: `tests/test_bench_g6_tasks.py` (each task's hidden test fails on start/ as a control and passes on reference/, task.json complete, needles unique); the reference-solving client passes all 41 (`tests/test_bench_runner.py`).
