@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Protocol
 
 
@@ -34,6 +35,25 @@ def denial_message(what: str, outcome: "Approval") -> str:
         return (f"The {what} could not be approved: no interactive input was available to ask "
                 f"the user. It did not run.")
     return f"The {what} was not approved and did not run."
+
+
+# Prefix of the approval detail for a write/edit whose target is outside the
+# session's working directory. `--approve auto-edit` and `auto_approve` grant
+# edits inside the cwd only, like Claude Code's acceptEdits mode; an edit
+# outside it is asked about. 2026-11-23: an auto-approved bench run wrote
+# integrity.py into the Wilbur repo root, outside its task directory.
+OUTSIDE_CWD = "OUTSIDE the working directory: "
+
+
+def outside_cwd(path: Path, cwd: str) -> bool:
+    """True when `path` is not under `cwd` (both resolved, symlinks followed)."""
+    try:
+        path.resolve().relative_to(Path(cwd).expanduser().resolve())
+    except ValueError:
+        return True
+    except OSError:
+        return True
+    return False
 
 
 @dataclass

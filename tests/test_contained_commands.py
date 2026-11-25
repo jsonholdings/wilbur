@@ -102,3 +102,23 @@ def test_rlimit_fallback_still_tells_the_model(tmp_path, monkeypatch):
     monkeypatch.setattr(contained, "scope_available", lambda: False)
     result = Bash().run({"command": LEAK, "timeout": 30}, _ctx(tmp_path))
     assert result.is_error and "memory cap" in result.output
+
+
+def test_scope_probe_uses_the_same_argv_as_real_commands(monkeypatch):
+    """The probe must fail wherever a wrapped command would: same flags as wrap()."""
+    seen = []
+
+    def fake_run(argv, **_):
+        seen.append(argv)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.delenv("WILBUR_NO_SCOPE", raising=False)
+    monkeypatch.setattr(contained.subprocess, "run", fake_run)
+    contained.scope_available.cache_clear()
+    try:
+        assert contained.scope_available()
+    finally:
+        contained.scope_available.cache_clear()
+    probe = seen[0]
+    real = contained.wrap(["true"], "64M", "u")
+    strip = lambda a: [x for x in a if not x.startswith("--unit=")]
+    assert strip(probe) == strip(real)

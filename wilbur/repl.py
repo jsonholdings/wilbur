@@ -30,7 +30,7 @@ from . import persona as persona_mod
 from . import projectdir
 from . import registry
 from .models import ModelManager, fit_report, gpu_free_mb, gpu_free_mb_for
-from .tools.base import Approval
+from .tools.base import OUTSIDE_CWD, Approval
 
 # Private build only: the public mirror ships without gpu_priority.py (see
 # scripts/sync_to_mirror.py), and then Wilbur behaves exactly as it always has.
@@ -533,9 +533,14 @@ class Repl:
     def _approve(self, tool: str, detail: str) -> Approval:
         if self.approve_mode == "all":
             return Approval.GRANTED
-        if self.approve_mode == "auto-edit" and tool in {"edit_file", "write_file"}:
+        # auto-edit and auto_approve cover edits inside the working directory
+        # only (tools/base.py OUTSIDE_CWD); one outside it is asked about.
+        inside = not detail.startswith(OUTSIDE_CWD)
+        if (self.approve_mode == "auto-edit" and tool in {"edit_file", "write_file"}
+                and inside):
             return Approval.GRANTED
-        if tool in self.config.auto_approve:
+        if tool in self.config.auto_approve and (
+                inside or tool not in {"edit_file", "write_file"}):
             return Approval.GRANTED
 
         # Every approval routes through this one prompt, whether it came from

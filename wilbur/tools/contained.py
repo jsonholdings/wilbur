@@ -65,9 +65,11 @@ def scope_available() -> bool:
     if os.environ.get("WILBUR_NO_SCOPE") == "1":
         return False
     try:
+        # Probe with exactly the argv real commands get (wrap): a probe without
+        # MemorySwapMax passed on hosts whose user manager rejects it, and then
+        # every wrapped command failed (gates red in a clean CI).
         probe = subprocess.run(
-            ["systemd-run", "--user", "--scope", "--quiet", "--collect",
-             "-p", "MemoryMax=64M", "--", "true"],
+            wrap(["true"], "64M", _unit_name()),
             capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return False

@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .base import Approval, ToolContext, ToolResult, clamp, denial_message
+from .base import (OUTSIDE_CWD, Approval, ToolContext, ToolResult, clamp, denial_message,
+                   outside_cwd)
 
 TEXT_SUFFIXES_BINARY = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip", ".gz",
                         ".tar", ".so", ".bin", ".exe", ".woff", ".woff2", ".ico"}
@@ -115,7 +116,8 @@ class WriteFile:
                 "lose that change. Re-read it, then retry.",
                 is_error=True,
             )
-        outcome = ctx.approve("write_file", f"write {len(content)} bytes to {path}")
+        where = OUTSIDE_CWD if outside_cwd(path, ctx.cwd) else ""
+        outcome = ctx.approve("write_file", f"{where}write {len(content)} bytes to {path}")
         if outcome is not Approval.GRANTED:
             return ToolResult(denial_message("write", outcome), is_error=True)
         before = path.read_text(errors="replace") if existed else ""
@@ -177,7 +179,8 @@ class EditFile:
                 "context to make it unique, or pass replace_all.",
                 is_error=True,
             )
-        outcome = ctx.approve("edit_file", f"edit {path}")
+        where = OUTSIDE_CWD if outside_cwd(path, ctx.cwd) else ""
+        outcome = ctx.approve("edit_file", f"{where}edit {path}")
         if outcome is not Approval.GRANTED:
             return ToolResult(denial_message("edit", outcome), is_error=True)
 

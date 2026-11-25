@@ -3,6 +3,15 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.53.0
+- Parity review (docs/PARITY-ANALYSIS.md): a ranked gap report from the two full 2x3090 A/B runs (default model 267/280 tasks, 8.4% of tool calls errored), one BACKLOG item per open gap.
+- `--approve auto-edit` and the `auto_approve` config grant `edit_file`/`write_file` inside the session's working directory only. An edit or write outside it is asked about, as in Claude Code's acceptEdits mode (`OUTSIDE_CWD` in `wilbur/tools/base.py`). `--approve all` is unchanged.
+- Bench: per-rep workdirs go to a fresh temp dir, and a `--workroot` inside any git repo is refused (`bench/runner.py` `isolated_workroot`). The 2026-11-23 run staged them inside this repo, so `35_integrity_manifest` treated the Wilbur repo as its project and wrote `integrity.py` into the repo root.
+- Bench rows carry `tool_error_kinds`, a tally of `tool: error class`, so the tool-error rate can be ranked by cause.
+- `contained.scope_available()` probes with exactly the `systemd-run` argv that `wrap()` gives real commands (it omitted `MemorySwapMax=0`), so a user manager that rejects a property used by real commands makes Wilbur fall back to RLIMIT instead of failing every command. This is the suspected cause of the public mirror CI being red since 2.44.1. It is not confirmed, because the CI log needs admin rights. A clean python:3.12-slim + git + make container passes the mirror suite before and after the change (1116 passed).
+- Tests: `tests/test_bench_isolation.py` (not mirrored: imports bench/) and `tests/test_parity_isolation.py` (temp workroot, a repo workroot refused, task dir left untouched, the outside-cwd flag with an in-cwd control, auto-edit and auto_approve ask outside the cwd, approve-all still grants, error-kind tally with a different-cause control).
+
+
 ## 2.52.1
 - `run_tests` takes a `cwd` argument (absolute, or relative to the session cwd). Owner session 2026-11-24: a `cd <repo> &&` in an earlier `run_bash` does not carry over, so `run_tests ./venv/bin/python -m pytest` ran from `$HOME`, hit `~/venv` ("No module named pytest") six times, and tripped the tool-failure breaker.
 - A `run_tests` command that exits non-zero without reporting any test counts now reads `tests: DID NOT RUN ... ran in <dir>` instead of `0 passed, 0 failed`, which looked like a clean suite.
