@@ -47,8 +47,8 @@ The three tasks that failed, on the default model (Qwen3.6 35b-a3b q8), on gq le
 | G4 | Wrong fix declared verified: the model's ad-hoc check did not test the property the task asked for (nested-dict mutation) | `12_json_deep_merge` 4/8 fail | `wilbur/agent.py` `_verify_after_write` runs only a project-defined check (`verify.detect`); with none, "done" rests on the model's own script | when the edited module has an existing test file, nudge the model to run it before finishing; harness-level "did you test the stated requirement" reminder | done in 2.55.0: `wilbur/doneclaim.py` `untested_done_nudge`; re-measured 8/8 |
 | G5 | Destructive shell auto-approved: kill of its own PID / PID 1 during a self-test | `32_kill_pid_list` 5/8 fail | `wilbur/tools/shell.py` `run_bash`; bench and `wilbur loop` approve all | refuse `kill`/`os.kill` aimed at PID 1, -1, 0 or Wilbur's own process group in every mode, and say why | done in 2.54.0: `wilbur/tools/killguard.py`; re-measured 6/8, no self-kill |
 | G6 | Suite coverage: no long-context, slow-command, WILBUR.md-instruction, multi-turn or verify-before-done tasks | `bench/tasks/` | `bench/tasks/` | add 6 tasks of those kinds (fixtures + hidden tests) and run them on one gq lease | open: `parity-g6-suite-coverage` |
-| G7 | Breaker budget carries across `wilbur loop` iterations | (existing) | `wilbur/loop.py:138` | `begin_user_turn()` per loop iteration | open: `loop-breaker-carryover` |
-| G8 | Fallback model is chosen once at session start | (existing) | see `fallback-model-one-shot` | (existing item) | open |
+| G7 | Breaker budget carries across `wilbur loop` iterations | (existing) | `wilbur/loop.py:138` | `begin_user_turn()` per loop iteration | DONE in 2.56.0 (`tests/test_loop_breaker_fresh_budget.py`) |
+| G8 | `wilbur -p` one-shot did not choose the fallback model | (existing) | `wilbur/__main__.py` `_oneshot_fallback` | `choose_session_model` before a one-shot; `-m` never swapped | DONE in 2.56.0 (`tests/test_oneshot_fallback.py`) |
 
 ## Method notes
 

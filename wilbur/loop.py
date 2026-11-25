@@ -134,6 +134,11 @@ def run_goal_loop(
                   f"\"{GOAL_COMPLETE}\" once verified.)" if turn == 1 else
                   CONTINUE_PROMPT.format(turn=turn, why=why, goal=goal, marker=GOAL_COMPLETE))
         before = sum(1 for m in agent.messages if m.get("role") == "tool")
+        # 2.56.0 (parity G7, BACKLOG loop-breaker-carryover): each loop turn
+        # starts with a fresh tool-failure budget, like a typed REPL line, so a
+        # breaker trip in turn N does not re-trip turn N+1 on its first failure.
+        # The per-call ledger is kept, so an identical failing call stays blocked.
+        agent.begin_user_turn()
         try:
             reply = agent.run(prompt)
         except KeyboardInterrupt:

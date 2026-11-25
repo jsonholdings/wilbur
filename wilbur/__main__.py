@@ -114,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
 
     prompt = args.oneshot or (" ".join(args.prompt) if args.prompt else "")
     if prompt:
+        if backend != "fake" and not args.model:  # an explicit -m is never swapped
+            _oneshot_fallback(config)
         return _oneshot(config, args.cwd, prompt, auto=args.yes or bool(args.oneshot))
 
     if args.forget:
@@ -337,6 +339,20 @@ def _enter_project(args: argparse.Namespace, explicit_dir: bool) -> None:
                         "(run `wilbur --here` to stay in $HOME)"))
         return
     projectdir.record_last_project(args.cwd)
+
+
+def _oneshot_fallback(config: Config) -> None:
+    """2.56.0 (parity G8): a one-shot picks its model like the REPL and `wilbur
+    loop` do -- `fallback_model` when the default does not fit the cards that
+    are present (e.g. the second 3090 missing). Never prompts: a script may be
+    driving it. The notice goes to stderr so stdout stays the reply."""
+    if not config.fallback_model:
+        return
+    manager = ModelManager(config.base_url)
+    installed = {m.name: m for m in manager.list_models() if m.supports_tools}
+    note = choose_session_model(config, installed, manager.reclaimable_vram_mb())
+    if note:
+        print(ui.notice(note), file=sys.stderr)
 
 
 def _oneshot(config: Config, cwd: str, prompt: str, auto: bool) -> int:

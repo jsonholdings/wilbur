@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.56.0
+- One-shot fallback model (parity G8, BACKLOG fallback-model-one-shot): `wilbur -p` now runs the same `choose_session_model` check as the REPL and `wilbur loop`, so with the second 3090 missing it uses `fallback_model` and prints the notice on stderr (stdout stays the reply) instead of failing the fit on the two-card default. It never prompts. `-p -m X` is never swapped. `wilbur/__main__.py` `_oneshot_fallback`.
+- Loop breaker budget (parity G7, BACKLOG loop-breaker-carryover): every goal-loop / `wilbur loop` turn starts with a fresh tool-failure budget (`Agent.begin_user_turn`), as a typed REPL line has since 2.51.1. Before, a breaker trip in one turn re-tripped the next turn on its first failing call. The per-call ledger is kept, so an identical failing call stays blocked. `wilbur/loop.py` `run_goal_loop`.
+- Tests: `tests/test_oneshot_fallback.py` (fallback with one card, controls: both cards keep the default, `-m` never swapped, no fallback configured; mutation with the hook unwired fails); `tests/test_loop_breaker_fresh_budget.py` (turn 2 recovers; control without the reset re-trips).
+
+
 ## 2.55.1
 - Bench: a `run_tests` call that ran the suite and reported failing or erroring tests is counted in a new per-row `red_test_runs` field, not in `tool_errors`. It is the model's red/green loop, not a broken tool call. Parity round 3 found that most "tool errors" on `12_json_deep_merge` were red test runs, which inflated the G3 error rate. Pytest and other runners' summaries are recognised; a run that could not run (`DID NOT RUN`, timeout, bad cwd, denial, unparseable output) is still a tool error. `bench/runner.py` `is_red_test_run`.
 - Tests: `tests/test_bench_isolation.py` (pytest red and collection-error runs, a jest red run, controls: a green run, `DID NOT RUN`, a runner-missing error and the same text from `run_bash` stay tool errors).
