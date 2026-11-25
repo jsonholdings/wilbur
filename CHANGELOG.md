@@ -3,6 +3,11 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.54.0
+- Kill guard (parity G5, bench `32_kill_pid_list` 5 of 8 reps failed: the model's self-test SIGTERM'd Wilbur and then tried PID 1 under approve-all). `run_bash` refuses, before approval and in every approval mode, a `kill` of 1, 0, -1, Wilbur's own PID, its parent, its process group (PGID or -PGID) or `$PPID`, and a `pkill`/`killall` whose pattern matches Wilbur's own process, init/systemd, or that selects by user (`-u`). The message says to signal only the child PIDs the command started. New `wilbur/tools/killguard.py`; a `$(pgrep ...)` target cannot be resolved before running and is left to approval.
+- Tests: `tests/test_shell_kill_guard.py` (blocked forms incl. wrappers and chained segments, allowed forms incl. `kill $!`, `kill -l` and quoted text, refused without running or asking, and a control that `kill <child pid>` still runs). Mutation control: with the guard unwired, the test run SIGTERMs itself.
+
+
 ## 2.53.0
 - Parity review (docs/PARITY-ANALYSIS.md): a ranked gap report from the two full 2x3090 A/B runs (default model 267/280 tasks, 8.4% of tool calls errored), one BACKLOG item per open gap.
 - `--approve auto-edit` and the `auto_approve` config grant `edit_file`/`write_file` inside the session's working directory only. An edit or write outside it is asked about, as in Claude Code's acceptEdits mode (`OUTSIDE_CWD` in `wilbur/tools/base.py`). `--approve all` is unchanged.

@@ -10,6 +10,7 @@ from typing import Any
 
 from ..inbox import DEFAULT_BOUND_S, is_wait_command, poll_interval
 from . import contained
+from .killguard import kill_refusal
 from .base import Approval, ToolContext, ToolResult, clamp, denial_message
 
 
@@ -90,6 +91,10 @@ class Bash:
         elevated = elevation_program(command)
         if elevated:
             return ToolResult(ELEVATION_REFUSAL.format(prog=elevated), is_error=True)
+
+        refusal = kill_refusal(command)
+        if refusal:
+            return ToolResult(refusal, is_error=True)
 
         lowered = command.lower()
         for pattern in ctx.config.denied_bash:

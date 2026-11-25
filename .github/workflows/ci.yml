@@ -37,4 +37,39 @@ jobs:
       - name: Install Wilbur with test extras
         run: pip install ".[dev]"
       - name: Python tests
-        run: python -m pytest tests/ -q
+        run: python -m pytest tests/ -q -rfE --junitxml=pytest-junit.xml 2>&1 | tee pytest-output.txt; exit "${PIPESTATUS[0]}"
+        shell: bash
+      # The job log needs an authenticated reader; check-run annotations and the
+      # artifact do not, so failures stay readable from the public API.
+      - name: Report failed tests as annotations
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import os, xml.etree.ElementTree as ET
+          if not os.path.exists("pytest-junit.xml"):
+              print("::error title=pytest::no junit xml; see pytest-output.txt artifact")
+              raise SystemExit(0)
+          summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+          summary.write("## Failed tests\n\n")
+          count = 0
+          for case in ET.parse("pytest-junit.xml").iter("testcase"):
+              for bad in list(case.findall("failure")) + list(case.findall("error")):
+                  name = f"{case.get('classname')}::{case.get('name')}"
+                  text = (bad.get("message") or "") + "\n" + (bad.text or "")
+                  tail = " | ".join(line.strip() for line in text.strip().splitlines()[-12:])
+                  tail = tail.replace("%", "%25").replace("\r", "").replace("\n", "%0A")[:1500]
+                  if count < 40:
+                      title = name.replace("::", ".").replace(",", ";")[:200]
+                      print(f"::error title={title}::{tail}")
+                  summary.write(f"- `{name}`: {tail[:400]}\n")
+                  count += 1
+          print(f"::error title=pytest::{count} failed tests (see the artifact pytest-failures)")
+          PY
+      - name: Upload pytest output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-failures
+          path: |
+            pytest-junit.xml
+            pytest-output.txt
