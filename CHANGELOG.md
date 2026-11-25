@@ -3,6 +3,11 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.57.0
+- Bench coverage (parity G6): six tasks for areas the suite did not measure. `36_long_context_needle` (one wrong function among 2,400 in a ~300 KB module; every other function must stay byte-identical), `41_long_log_needle` (the one 500 among 6,000 log lines), `37_slow_build_step` (a fix that only counts once a ~25 s `build.sh` has regenerated its output), `38_wilbur_md_rules` (a new function that must follow the project's WILBUR.md rules), `39_verify_before_done` (a visible test that passes on a partial fix, hidden edge cases that do not) and `40_multi_step_change` (rename, new parameter and caller update in one request). The full suite is now 41 tasks, so a full A/B run takes about 25 s more per rep. These are not yet measured on a model.
+- Tests: `tests/test_bench_g6_tasks.py` (each task's hidden test fails on start/ as a control and passes on reference/, task.json complete, needles unique); the reference-solving client passes all 41 (`tests/test_bench_runner.py`).
+
+
 ## 2.56.0
 - One-shot fallback model (parity G8, BACKLOG fallback-model-one-shot): `wilbur -p` now runs the same `choose_session_model` check as the REPL and `wilbur loop`, so with the second 3090 missing it uses `fallback_model` and prints the notice on stderr (stdout stays the reply) instead of failing the fit on the two-card default. It never prompts. `-p -m X` is never swapped. `wilbur/__main__.py` `_oneshot_fallback`.
 - Loop breaker budget (parity G7, BACKLOG loop-breaker-carryover): every goal-loop / `wilbur loop` turn starts with a fresh tool-failure budget (`Agent.begin_user_turn`), as a typed REPL line has since 2.51.1. Before, a breaker trip in one turn re-tripped the next turn on its first failing call. The per-call ledger is kept, so an identical failing call stays blocked. `wilbur/loop.py` `run_goal_loop`.
