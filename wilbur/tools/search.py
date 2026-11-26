@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from . import hints
 from .base import ToolContext, ToolResult, clamp
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv",
@@ -31,7 +32,10 @@ class Glob:
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         root = Path(args.get("path") or ctx.cwd).expanduser()
         if not root.is_dir():
-            return ToolResult(f"Not a directory: {root}", is_error=True)
+            message = f"Not a directory: {root}"
+            if args.get("path") and not root.exists():
+                message += "\n" + hints.missing_path_hint(args["path"], str(ctx.cwd))
+            return ToolResult(message, is_error=True)
         matches = []
         for p in root.glob(args["pattern"]):
             if not p.is_file():
@@ -69,6 +73,16 @@ class Grep:
 
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         target = str(Path(args.get("path") or ctx.cwd).expanduser())
+        # 2.58.0: a path that is not there gets a pointer at the project
+        # root and the nearest match, not rg's bare "No such file" error.
+        if args.get("path"):
+            check = Path(target)
+            if not check.is_absolute():
+                check = Path(ctx.cwd) / check
+            if not check.exists():
+                return ToolResult(f"No such file or directory: {args['path']}\n"
+                                  + hints.missing_path_hint(args["path"], str(ctx.cwd)),
+                                  is_error=True)
         rg = shutil.which("rg")
         if rg:
             cmd = [rg, "--no-heading", "--line-number", "--color", "never"]
@@ -98,7 +112,8 @@ class Grep:
             cmd += ["-e", args["pattern"], target]
 
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
+            # cwd=ctx.cwd: a relative path means the project's, as in run_bash.
+            proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ctx.cwd),
                                   timeout=60, errors="replace")
         except subprocess.TimeoutExpired:
             return ToolResult("Search timed out after 60s. Narrow the pattern or path.",

@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from ..inbox import DEFAULT_BOUND_S, is_wait_command, poll_interval
-from . import contained
+from . import contained, hints
 from .killguard import kill_refusal
 from .base import Approval, ToolContext, ToolResult, clamp, denial_message
 
@@ -125,8 +125,14 @@ class Bash:
         body = clamp(body.strip(), ctx.config.max_tool_output_chars,
                      ctx.config.max_tool_output_lines)
         if proc.returncode != 0:
-            return ToolResult(f"exit {proc.returncode}\n{body}" if body
-                              else f"exit {proc.returncode} (no output)", is_error=True)
+            text = (f"exit {proc.returncode}\n{body}" if body
+                    else f"exit {proc.returncode} (no output)")
+            # 2.58.0: one-line recovery hints (python -> python3, a stray cd).
+            extra = [h for h in (hints.missing_command_hint(text, str(ctx.cwd)),
+                                 hints.cd_hint(command, text, str(ctx.cwd))) if h]
+            if extra:
+                text += "\n" + "\n".join(extra)
+            return ToolResult(text, is_error=True)
         return ToolResult(body or "(no output)")
 
     @staticmethod

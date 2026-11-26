@@ -37,6 +37,27 @@ The three tasks that failed, on the default model (Qwen3.6 35b-a3b q8), on gq le
 - **G1 held:** nothing was written outside the task dir, and the stray `integrity.py` (2026-11-23) has not been touched since.
 - **G3 finding, fixed in 2.55.1:** most of the "tool errors" were red test runs, not broken calls. Bench rows now count them in `red_test_runs`, so the 8.4% error rate in the table above overstates real tool failures. The next full run measures the corrected rate.
 
+## Re-measure 2.57.1 + trace 2.57.2 (2026-11-25)
+
+Full 41-task run on 2.57.1 (default model, 2x3090, 4 reps): **164/164 pass**.
+
+| Metric | 2.55.0 | 2.57.1 |
+|---|---|---|
+| Tool errors | 8.4% | 7.1% |
+| Reps with >=1 tool error | 51% | 42% |
+| Median wall time | not recorded | 17.4 s |
+| p90 wall time | 40.9 s | 60.5 s |
+| Rounds per rep | 7.8 | 9.5 |
+
+Trace run on 2.57.2 (10 tasks x4, `tool_trace` per call): 40/40 pass, 45 failed calls:
+
+- 15 `python: not found` (`python -c`, `python -m doctest`; the host has only `python3`). Fixed in 2.58.0: the briefing says "use python3" and the exit-127 result names the alternative.
+- About 6 wrong cwd/path: a `cd` into the parent of the task dir, `write_file('/test_ranges.py')` at the filesystem root, grep on a missing dir. Fixed in 2.58.0: the briefing says no `cd` is needed, and each failure gets a hint naming the project path.
+- 17 red test runs (expected: the model's own red/green loop).
+- 2 overwrite-without-read guard refusals (working as intended).
+
+Next gap: rounds roughly equal calls -- the model makes one tool call per round, so every call pays a full model turn.
+
 ## Gaps, ranked
 
 | # | Gap | Evidence | Source | Fix | Status |

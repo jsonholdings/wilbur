@@ -16,6 +16,7 @@ from .llm import OllamaClient as _RealOllamaClient
 from .state import BRIEFING_MARKER, RunState
 from .tools import ToolContext, build_registry, to_schema
 from .tools.base import Approval
+from .tools.hints import env_facts
 
 # Tools whose success changes files on disk, and therefore the moment at
 # which the project's own check is worth running.
@@ -179,7 +180,10 @@ class Agent:
         # Tool rules sit inside the static prefix: built once here from a
         # PATH probe cached per process, so the prefix never changes mid-session.
         rules = tool_rules_for(set(registry))
-        system = SYSTEM_PROMPT + (f"\n\n{rules}" if rules else "")
+        self._system_rules = SYSTEM_PROMPT + (f"\n\n{rules}" if rules else "")
+        # 2.58.0: environment facts (project root, no `cd` needed, which
+        # interpreters exist) probed once here, in the static prefix.
+        system = self._system_rules + "\n\n" + env_facts(cwd)
         self._system_base = system
         system += f"\n\n{system_extra}" if system_extra else ""
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
@@ -601,6 +605,9 @@ class Agent:
 
     def set_system_extra(self, system_extra: str) -> None:
         """Rebuild the system message (after /cd changes the project)."""
+        # /cd already rewrites the system message, so re-probing the
+        # environment facts for the new root costs no extra re-read.
+        self._system_base = self._system_rules + "\n\n" + env_facts(str(self.ctx.cwd))
         system = self._system_base + (f"\n\n{system_extra}" if system_extra else "")
         if self.messages and self.messages[0].get("role") == "system":
             self.messages[0]["content"] = system

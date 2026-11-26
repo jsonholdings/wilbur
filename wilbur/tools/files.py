@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from . import hints
 from .base import (OUTSIDE_CWD, Approval, ToolContext, ToolResult, clamp, denial_message,
                    outside_cwd)
 
@@ -17,6 +18,13 @@ def _resolve(path: str, ctx: ToolContext) -> Path:
     if not p.is_absolute():
         p = Path(ctx.cwd) / p
     return p
+
+
+def _with_hint(message: str, raw: str, ctx: ToolContext, *, want_existing: bool) -> str:
+    """2.58.0: a failed op on an absolute path outside the project gets a
+    one-line pointer at the project path (hint only, never a rewrite)."""
+    hint = hints.outside_path_hint(raw, str(ctx.cwd), want_existing=want_existing)
+    return f"{message}\n{hint}" if hint else message
 
 
 def _changed_since_read(path: Path, ctx: ToolContext) -> bool:
@@ -55,7 +63,8 @@ class ReadFile:
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = _resolve(args["path"], ctx)
         if not path.exists():
-            return ToolResult(f"File does not exist: {path}", is_error=True)
+            return ToolResult(_with_hint(f"File does not exist: {path}", args["path"], ctx,
+                                         want_existing=True), is_error=True)
         if path.is_dir():
             return ToolResult(f"{path} is a directory. Use list_files.", is_error=True)
         if path.suffix.lower() in TEXT_SUFFIXES_BINARY:
@@ -64,7 +73,8 @@ class ReadFile:
         try:
             raw = path.read_text(errors="replace")
         except OSError as exc:
-            return ToolResult(f"Could not read {path}: {exc}", is_error=True)
+            return ToolResult(_with_hint(f"Could not read {path}: {exc}", args["path"], ctx,
+                                         want_existing=True), is_error=True)
 
         ctx.read_files[str(path)] = path.stat().st_mtime
 
@@ -121,8 +131,12 @@ class WriteFile:
         if outcome is not Approval.GRANTED:
             return ToolResult(denial_message("write", outcome), is_error=True)
         before = path.read_text(errors="replace") if existed else ""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        except OSError as exc:
+            return ToolResult(_with_hint(f"Could not write {path}: {exc}", args["path"], ctx,
+                                         want_existing=False), is_error=True)
         ctx.read_files[str(path)] = path.stat().st_mtime
         verb = "Updated" if existed else "Created"
         return ToolResult(f"{verb} {path} ({len(content.splitlines())} lines).",
@@ -152,7 +166,8 @@ class EditFile:
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = _resolve(args["path"], ctx)
         if not path.exists():
-            return ToolResult(f"File does not exist: {path}", is_error=True)
+            return ToolResult(_with_hint(f"File does not exist: {path}", args["path"], ctx,
+                                         want_existing=True), is_error=True)
         if str(path) not in ctx.read_files:
             return ToolResult(
                 f"Read {path} before editing it.", is_error=True)
@@ -235,7 +250,10 @@ class ListFiles:
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = _resolve(args.get("path", "."), ctx)
         if not path.is_dir():
-            return ToolResult(f"Not a directory: {path}", is_error=True)
+            message = f"Not a directory: {path}"
+            if not path.exists():
+                message += "\n" + hints.missing_path_hint(args.get("path", "."), str(ctx.cwd))
+            return ToolResult(message, is_error=True)
         entries = []
         for item in sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name)):
             if item.name.startswith(".") and item.name not in {".env.example"}:
