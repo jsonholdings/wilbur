@@ -337,8 +337,8 @@ def test_cancel_between_tool_calls_stops_the_remaining_calls_in_that_round(make_
     a, client = make_agent(replies)
 
     real_execute = a._execute
-    def cancel_after_first(c):
-        result = real_execute(c)
+    def cancel_after_first(c, *rest):
+        result = real_execute(c, *rest)
         a.cancel_event.set()
         return result
     a._execute = cancel_after_first

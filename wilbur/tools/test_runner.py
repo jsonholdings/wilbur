@@ -169,7 +169,8 @@ class RunTests:
     description = (
         "Run this project's test suite (auto-detects pytest/npm/make, or pass "
         "an explicit command) and return a compact pass/fail summary with "
-        "file:line for each failure when available."
+        "file:line for each failure when available. After several edits, "
+        "run it once for the batch, not after each edit."
     )
     schema = {
         "type": "object",

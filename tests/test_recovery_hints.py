@@ -138,9 +138,10 @@ def test_read_outside_path_hints_existing_project_file(ctx, tools, tmp_path):
 
 
 def test_file_hint_controls(ctx, tools, tmp_path):
-    # outside path with no project counterpart: no hint
+    # outside path with no project counterpart: the root only, no guess (2.59.0)
     r = tools["read_file"].run({"path": "/nonexistent-dir-xyz/other.py"}, ctx)
-    assert r.is_error and "[harness]" not in r.output
+    assert r.is_error and "did you mean" not in r.output
+    assert f"outside the project root {tmp_path}" in r.output
     # missing file INSIDE the project: no hint
     r = tools["read_file"].run({"path": str(tmp_path / "missing.py")}, ctx)
     assert r.is_error and "[harness]" not in r.output

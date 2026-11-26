@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable
 
 from .config import Config
@@ -22,6 +23,14 @@ from .tools.hints import env_facts
 # which the project's own check is worth running.
 WRITE_TOOLS = {"write_file", "edit_file"}
 
+# 2.59.0: tools safe to run concurrently when one reply holds several of them.
+# They never prompt for approval and only add keys to ctx.read_files; anything
+# that writes or runs a command stays sequential, in reply order. Trace bench
+# trace-2572 showed rounds ~= calls (4 file reads in 4 rounds), so a batched
+# reply should cost one round's wall time, not four.
+PARALLEL_READ_TOOLS = frozenset({"read_file", "grep", "glob", "list_files"})
+READ_BATCH_WORKERS = 4
+
 SYSTEM_PROMPT = """You are Wilbur, a coding agent working in a terminal on the user's machine.
 
 You act rather than advise: read the real files, run the real commands, make the
@@ -31,7 +40,7 @@ never claim a change works until a command you ran says so.
 
 Working rules:
 - Read a file before you edit it; prefer edit_file over write_file for existing files.
-- Run one tool at a time and read its result before deciding the next step.
+- Batch independent calls in ONE reply (reads run in parallel); test once after edits.
 - More than two steps -> todo_write first: small, numbered, independently
   testable items. Verify each with a real command and mark it completed before
   the next; never one large unverified change.
@@ -395,11 +404,15 @@ class Agent:
             empty_retries = 0
             self._big_content_streak = 0
             cancelled_mid_round = False
-            for call in reply.tool_calls:
+            calls = list(reply.tool_calls)
+            prefetched: dict[int, Future] = {}
+            for index, call in enumerate(calls):
                 if self.cancel_event.is_set():
                     cancelled_mid_round = True
                     break
-                result = self._execute(call)
+                if index not in prefetched:
+                    prefetched.update(self._prefetch_reads(calls, index))
+                result = self._execute(call, prefetched.pop(index, None))
                 self.messages.append(self._tool_message(call, result))
                 self.on_event("message", {})
             # Remaining calls of this round still run (a skipped call would
@@ -591,8 +604,44 @@ class Agent:
             msg["tool_call_id"] = call.call_id
         return msg
 
-    def _execute(self, call: ToolCall) -> str:
-        text = self._execute_tool(call)
+    def _parallel_read_run(self, calls: list[ToolCall], start: int) -> list[int]:
+        """Indexes of the contiguous run of parallel-safe read calls starting
+        at `start`. It stops at the first write/command call, so a read that
+        follows an edit in the same reply still sees the edited file."""
+        run: list[int] = []
+        for index in range(start, len(calls)):
+            call = calls[index]
+            if call.name not in PARALLEL_READ_TOOLS or self.registry.get(call.name) is None:
+                break
+            run.append(index)
+        return run
+
+    def _prefetch_reads(self, calls: list[ToolCall], start: int) -> dict[int, Future]:
+        """Run a batch of two or more independent reads concurrently and hand
+        back their finished futures by index. Only `tool.run` happens on the
+        pool; events, the failure ledger and hints are still applied by
+        `_execute` one call at a time in reply order, so the transcript and
+        the UI see exactly the sequential order."""
+        run = self._parallel_read_run(calls, start)
+        if len(run) < 2:
+            return {}
+        futures: dict[int, Future] = {}
+        with ThreadPoolExecutor(max_workers=min(READ_BATCH_WORKERS, len(run)),
+                                thread_name_prefix="wilbur-read") as pool:
+            for index in run:
+                call = calls[index]
+                tool = self.registry.get(call.name)
+                futures[index] = pool.submit(self._timed_run, tool, call.arguments)
+        # Leaving the `with` joins every worker: no thread outlives the batch.
+        self.on_event("read_batch", {"calls": len(run)})
+        return futures
+
+    def _timed_run(self, tool: Any, arguments: dict[str, Any] | None) -> tuple[Any, float]:
+        started = time.time()
+        return tool.run(arguments, self.ctx), time.time() - started
+
+    def _execute(self, call: ToolCall, prefetched: Future | None = None) -> str:
+        text = self._execute_tool(call, prefetched)
         if call.name in ("run_bash", "run_tests"):
             # 2.52.0: a shell call that `cd`s into a repo marks it as the last
             # project, and a `No module named X` gets the interpreter/venv facts.
@@ -614,7 +663,7 @@ class Agent:
         else:
             self.messages.insert(0, {"role": "system", "content": system})
 
-    def _execute_tool(self, call: ToolCall) -> str:
+    def _execute_tool(self, call: ToolCall, prefetched: Future | None = None) -> str:
         tool = self.registry.get(call.name)
         signature = f"{call.name}({self._arg_signature(call)})"
         if tool is None:
@@ -639,7 +688,13 @@ class Agent:
         })
         started = time.time()
         try:
-            result = tool.run(call.arguments, self.ctx)
+            if prefetched is not None:
+                # Ran on the read pool; .result() re-raises the tool's own
+                # exception, so the handlers below treat it exactly as inline.
+                result, seconds = prefetched.result()
+                started = time.time() - seconds
+            else:
+                result = tool.run(call.arguments, self.ctx)
         except KeyError as exc:
             result_text = (f"Missing required argument {exc} for {call.name}. "
                            f"Schema: {json.dumps(tool.schema)}")

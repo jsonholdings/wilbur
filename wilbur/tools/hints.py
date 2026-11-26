@@ -123,21 +123,36 @@ def cd_hint(command: str, output: str, cwd: str) -> str:
     return f"[harness] {why}. run_bash already runs in {root}; drop the cd."
 
 
+def _fits(cand: Path, want_existing: bool) -> bool:
+    if want_existing:
+        return cand.exists()
+    return cand.parent.is_dir() and os.access(cand.parent, os.W_OK)
+
+
 def _project_candidate(raw: str, root: Path, want_existing: bool) -> Path | None:
-    """<root>/<basename> (or <root>/<path minus leading />) if it fits."""
+    """The project path the model plausibly meant, else None.
+
+    First choice is <root>/<path minus leading />: the same relative name
+    under the root ('/test_x.py' -> 'test_x.py'). The <root>/<basename>
+    fallback is used only when the raw path's own parent directory does not
+    exist, i.e. the prefix was invented. When that parent is a real directory
+    elsewhere (another project, /etc), a same-named project file is a
+    coincidence, not the target (2.58.0 verifier: it could name an unrelated
+    file), so no guess is made.
+    """
     stripped = raw.lstrip("/")
-    for cand in (root / stripped, root / Path(raw).name):
-        if want_existing:
-            if cand.exists():
-                return cand
-        elif cand.parent.is_dir() and os.access(cand.parent, os.W_OK):
-            return cand
-    return None
+    if stripped and _fits(root / stripped, want_existing):
+        return root / stripped
+    if Path(raw).parent.is_dir():
+        return None
+    cand = root / Path(raw).name
+    return cand if _fits(cand, want_existing) else None
 
 
 def outside_path_hint(raw: str, cwd: str, *, want_existing: bool) -> str:
     """A failed file op on an absolute path outside the project root: point
-    at the project path that exists (read/edit) or is writable (write)."""
+    at the project path that exists (read/edit) or is writable (write), or,
+    when no project path is a plausible match, at the root alone."""
     if not raw:
         return ""
     path = Path(os.path.expanduser(raw))
@@ -153,7 +168,8 @@ def outside_path_hint(raw: str, cwd: str, *, want_existing: bool) -> str:
         return ""
     cand = _project_candidate(raw, root, want_existing)
     if cand is None:
-        return ""
+        return (f"[harness] {raw} is outside the project root {root}; "
+                "paths relative to the root are resolved there.")
     rel = os.path.relpath(cand, root)
     return (f"[harness] {raw} is outside the project root {root}; "
             f"did you mean {cand} (relative: {rel!r})?")

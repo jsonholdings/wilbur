@@ -18,7 +18,9 @@ class Glob:
     read_only = True
     description = (
         "Find files by name pattern, e.g. '**/*.py' or 'src/**/test_*.js'. "
-        "Returns paths sorted by modification time, newest first."
+        "Returns paths sorted by modification time, newest first. A relative "
+        "path is under the project root. Several independent searches can go "
+        "in one reply; they run in parallel."
     )
     schema = {
         "type": "object",
@@ -31,6 +33,10 @@ class Glob:
 
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         root = Path(args.get("path") or ctx.cwd).expanduser()
+        # 2.59.0: a relative path is under the project root (as grep and the
+        # hints say), not under whatever the process cwd happens to be.
+        if not root.is_absolute():
+            root = Path(ctx.cwd) / root
         if not root.is_dir():
             message = f"Not a directory: {root}"
             if args.get("path") and not root.exists():

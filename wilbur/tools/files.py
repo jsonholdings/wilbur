@@ -48,7 +48,8 @@ class ReadFile:
     read_only = True
     description = (
         "Read a file from disk. Returns the contents with 1-indexed line numbers. "
-        "Use before editing any file. For large files pass offset and limit."
+        "Use before editing any file. For large files pass offset and limit. "
+        "Need several files? Request them all in one reply; they are read in parallel."
     )
     schema = {
         "type": "object",
@@ -240,7 +241,8 @@ def _near_miss_hint(text: str, old: str) -> str:
 class ListFiles:
     name = "list_files"
     read_only = True
-    description = "List the entries of a directory."
+    description = ("List the entries of a directory. Batch it with other "
+                   "independent reads in one reply; they run in parallel.")
     schema = {
         "type": "object",
         "properties": {"path": {"type": "string"}},
