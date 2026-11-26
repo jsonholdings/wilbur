@@ -574,8 +574,11 @@ class OllamaClient:
                     kind, item = out.get(timeout=self.stall_timeout)
                 except queue.Empty:
                     silent = self._clock() - last_byte
-                    over_total = bool(self.timeout) and self._clock() - started > self.timeout
-                    if over_total or not self._still_working(silent):
+                    # 2.60: self.timeout is an IDLE cap (time since the last
+                    # chunk), not a cap on the whole reply, so a long reply
+                    # that keeps streaming is never cut.
+                    over_idle = bool(self.timeout) and silent > self.timeout
+                    if over_idle or not self._still_working(silent):
                         raise ModelNotResponding(silent) from None
                     phase = "busy"
                     self._progress("busy", silent_s=int(silent))
@@ -591,7 +594,16 @@ class OllamaClient:
                 line = line.strip()
                 if not line:
                     continue
-                chunk = json.loads(line)
+                try:
+                    chunk = json.loads(line)
+                except ValueError as exc:
+                    raise TransientOllamaError(
+                        f"model server sent a malformed stream line ({exc.msg} at char "
+                        f"{exc.pos}): {line[:80]!r}. Type /retry to try again.") from None
+                if not isinstance(chunk, dict):
+                    raise TransientOllamaError(
+                        f"model server sent a non-object stream line: {line[:80]!r}. "
+                        "Type /retry to try again.")
                 if chunk.get("error"):
                     raise RuntimeError(f"ollama: {chunk['error']}")
                 message = chunk.get("message") or {}
@@ -613,8 +625,6 @@ class OllamaClient:
                         and not content and not tool_calls):
                     thinking_cut = True
                     break
-                if self.timeout and self._clock() - started > self.timeout:
-                    raise ModelNotResponding(self.timeout)
         except BaseException:
             stop.set()
             self._abort(holder)

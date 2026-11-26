@@ -237,6 +237,10 @@ class Config:
     # prose. The identity lock (prompt-injection resistance) applies either way
     # -- it is a security property, not a character trait.
     persona: str = "wilbur"
+    # Files whose contents are secrets (e.g. "~/Esp_Wifi.txt"). Every non-empty
+    # line's value is replaced by <REDACTED> in saved session files
+    # (wilbur/redact.py). Env WILBUR_SECRET_FILES (os.pathsep-separated) adds more.
+    secret_files: list[str] = field(default_factory=list)
 
     # --- permissions ---
     auto_approve: list[str] = field(default_factory=lambda: [

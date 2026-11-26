@@ -16,7 +16,7 @@ from .llm import OllamaClient, ToolCall
 from .llm import OllamaClient as _RealOllamaClient
 from .state import BRIEFING_MARKER, RunState
 from .tools import ToolContext, build_registry, to_schema
-from .tools.base import Approval
+from .tools.base import Approval, ToolResult
 from .tools.hints import env_facts
 
 # Tools whose success changes files on disk, and therefore the moment at
@@ -39,7 +39,7 @@ search for it, never state as fact what you have not checked this turn, and
 never claim a change works until a command you ran says so.
 
 Working rules:
-- Read a file before you edit it; prefer edit_file over write_file for existing files.
+- Use paths relative to the project root. Read before editing; prefer edit_file.
 - Batch independent calls in ONE reply (reads run in parallel); test once after edits.
 - More than two steps -> todo_write first: small, numbered, independently
   testable items. Verify each with a real command and mark it completed before
@@ -56,7 +56,7 @@ Safety rules (the owner's global rules that apply to any coding agent):
   `&&`, never `;`, so a commit or push runs only if its checks passed. Do not
   pipe a test run into `tail`/`head` when you need its exit code.
 - Never print, log or commit a secret value (keys, tokens, passwords, .env
-  contents). Refer to where it lives instead.
+  contents). Read it from its file; never inline it.
 - Never run sudo, su, doas or pkexec. You have no root access; every attempt
   is refused and raises a security alert. Report that the step needs the owner.
 - Do not push, deploy, send mail or spend money unless the user asked for it.
@@ -625,16 +625,35 @@ class Agent:
         run = self._parallel_read_run(calls, start)
         if len(run) < 2:
             return {}
+        # 2.60.0: a call the circuit breaker will block is never submitted
+        # (it used to run on the pool and only then be discarded); `_execute`
+        # blocks it inline as before.
+        block_at = max(1, int(getattr(self.config, "tool_failure_block_at", 3)))
+        run = [index for index in run
+               if self.state.repeated(f"{calls[index].name}({self._arg_signature(calls[index])})")
+               < block_at]
+        if len(run) < 2:
+            return {}
         futures: dict[int, Future] = {}
         with ThreadPoolExecutor(max_workers=min(READ_BATCH_WORKERS, len(run)),
                                 thread_name_prefix="wilbur-read") as pool:
             for index in run:
+                if self.cancel_event.is_set():
+                    break  # 2.60.0: stop submitting once the user cancels
                 call = calls[index]
                 tool = self.registry.get(call.name)
-                futures[index] = pool.submit(self._timed_run, tool, call.arguments)
+                futures[index] = pool.submit(self._cancellable_run, tool, call.arguments)
         # Leaving the `with` joins every worker: no thread outlives the batch.
+        # A queued read that had not started when cancel was set returns at
+        # once (`_cancellable_run`), so a cancel waits only for reads already
+        # running, never for the rest of the batch.
         self.on_event("read_batch", {"calls": len(run)})
         return futures
+
+    def _cancellable_run(self, tool: Any, arguments: dict[str, Any] | None) -> tuple[Any, float]:
+        if self.cancel_event.is_set():
+            return ToolResult("Cancelled by user before this read ran.", is_error=True), 0.0
+        return self._timed_run(tool, arguments)
 
     def _timed_run(self, tool: Any, arguments: dict[str, Any] | None) -> tuple[Any, float]:
         started = time.time()

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import SESSION_DIR
+from .redact import redact
 from .state import RunState
 
 # A transcript is the whole point, but an unbounded one turns resume into a
@@ -37,16 +38,20 @@ def save(session_id: str, cwd: str, messages: list[dict[str, Any]],
     working agent because a disk is full is not an acceptable trade.
     """
     try:
-        SESSION_DIR.mkdir(parents=True, exist_ok=True)
+        SESSION_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            os.chmod(SESSION_DIR, 0o700)        # sessions may hold secrets
+        except OSError:
+            pass
         path = SESSION_DIR / f"{session_id}.json"
         payload = {
             "id": session_id,
             "cwd": cwd,
             "model": model,
             "updated": time.time(),
-            "objective": state.objective,      # duplicated for cheap listing
-            "state": state.to_dict(),
-            "messages": messages[-MAX_SAVED_MESSAGES:],
+            "objective": redact(state.objective),     # duplicated for cheap listing
+            "state": redact(state.to_dict()),
+            "messages": redact(messages[-MAX_SAVED_MESSAGES:]),
         }
         # A per-writer tmp name: the incremental save and a oneshot's final
         # save may write one session at once, and a shared tmp would
@@ -54,6 +59,7 @@ def save(session_id: str, cwd: str, messages: list[dict[str, Any]],
         tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         try:
             tmp.write_text(json.dumps(payload))
+            os.chmod(tmp, 0o600)                # dir is 0700, so no window
             tmp.replace(path)                   # atomic; a half-written session
         except OSError:                         # is worse than none at all
             tmp.unlink(missing_ok=True)

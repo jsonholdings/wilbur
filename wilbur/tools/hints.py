@@ -143,10 +143,27 @@ def _project_candidate(raw: str, root: Path, want_existing: bool) -> Path | None
     stripped = raw.lstrip("/")
     if stripped and _fits(root / stripped, want_existing):
         return root / stripped
-    if Path(raw).parent.is_dir():
+    parent = Path(raw).parent
+    if parent.is_dir() and not _is_ancestor(parent, root):
         return None
-    cand = root / Path(raw).name
-    return cand if _fits(cand, want_existing) else None
+    # 2.60.0: the prefix was invented, or it is an ANCESTOR of the root (the
+    # model dropped a long hidden segment such as `.bench-work-<task>-N`:
+    # trace-2590 had 26 such failed reads). Try the path's tails, longest
+    # first, so `/tmp/b/src/x.py` under root `/tmp/b/.w-1` names `src/x.py`.
+    parts = Path(raw).parts[1:]
+    for start in range(1, len(parts)):
+        cand = root.joinpath(*parts[start:])
+        if _fits(cand, want_existing):
+            return cand
+    return None
+
+
+def _is_ancestor(directory: Path, root: Path) -> bool:
+    try:
+        root.resolve().relative_to(directory.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 def outside_path_hint(raw: str, cwd: str, *, want_existing: bool) -> str:
@@ -197,6 +214,10 @@ def missing_path_hint(raw: str, cwd: str) -> str:
     """grep/glob/list_files on a path that does not exist."""
     root = Path(cwd)
     line = f"[harness] {raw} does not exist; paths are relative to the project root {root}"
+    if Path(raw).is_absolute():
+        cand = _project_candidate(raw, root, want_existing=True)
+        if cand is not None:
+            return line + f"; did you mean {os.path.relpath(cand, root)!r}?"
     name = Path(raw.rstrip("/")).name
     near = _nearest_match(name, root) if name and name not in (".", "..") else None
     if near is not None:

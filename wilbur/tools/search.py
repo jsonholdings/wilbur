@@ -1,7 +1,10 @@
 """Glob and grep, shelling out to fd/rg when present and falling back cleanly."""
 from __future__ import annotations
 
+import os
+import re
 import shutil
+import time
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -11,6 +14,89 @@ from .base import ToolContext, ToolResult, clamp
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv",
              "dist", "build", ".mypy_cache", ".pytest_cache"}
+
+# 2.60 glob-unbounded-walk: a `**` glob from `/` once walked a 14TB backup
+# drive in D state for minutes. The walk now prunes SKIP_DIRS and other mount
+# points before entering them, and stops at a time budget or a match cap.
+GLOB_TIME_BUDGET_S = 20.0
+GLOB_MAX_MATCHES = 5000
+
+
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    """Translate a Path.glob-style pattern (`**`, `*`, `?`, `[...]`) into a
+    regex over a '/'-joined path relative to the root."""
+    out: list[str] = []
+    i = 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif pattern[i] == "[":
+            end = pattern.find("]", i + 1)
+            if end == -1:
+                out.append(re.escape("["))
+                i += 1
+            else:
+                body = pattern[i + 1:end]
+                if body.startswith("!"):
+                    body = "^" + body[1:]
+                out.append("[" + body.replace("\\", "\\\\") + "]")
+                i = end + 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def bounded_glob(root: Path, pattern: str, *, time_budget_s: float = GLOB_TIME_BUDGET_S,
+                 max_matches: int = GLOB_MAX_MATCHES,
+                 clock: Any = time.monotonic) -> tuple[list[Path], str]:
+    """Walk root top-down, never entering SKIP_DIRS or another filesystem.
+    Returns (files matched, reason the walk was cut short or "")."""
+    pattern = pattern.lstrip("/")
+    regex = _glob_regex(pattern)
+    max_depth = None if "**" in pattern else pattern.count("/")
+    try:
+        root_dev = os.stat(root).st_dev
+    except OSError:
+        return [], ""
+    deadline = clock() + time_budget_s
+    matches: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root)
+        rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/") + "/"
+        depth = rel_dir.count("/")
+        kept = []
+        for d in dirnames:
+            if d in SKIP_DIRS or (max_depth is not None and depth >= max_depth):
+                continue
+            full = os.path.join(dirpath, d)
+            try:
+                if os.path.islink(full) or os.stat(full).st_dev != root_dev:
+                    continue
+            except OSError:
+                continue
+            kept.append(d)
+        dirnames[:] = kept  # prune in place: os.walk never enters the rest
+        for f in filenames:
+            if regex.match(rel_dir + f):
+                p = Path(dirpath) / f
+                if p.is_file():
+                    matches.append(p)
+                    if len(matches) >= max_matches:
+                        return matches, f"stopped at the {max_matches}-match cap"
+        if clock() > deadline:
+            return matches, f"stopped after the {time_budget_s:.0f}s time budget"
+    return matches, ""
 
 
 class Glob:
@@ -42,20 +128,23 @@ class Glob:
             if args.get("path") and not root.exists():
                 message += "\n" + hints.missing_path_hint(args["path"], str(ctx.cwd))
             return ToolResult(message, is_error=True)
-        matches = []
-        for p in root.glob(args["pattern"]):
-            if not p.is_file():
-                continue
-            if any(part in SKIP_DIRS for part in p.parts):
-                continue
-            matches.append(p)
+        matches, cut = bounded_glob(root, args["pattern"], time_budget_s=GLOB_TIME_BUDGET_S,
+                                    max_matches=GLOB_MAX_MATCHES)
+        note = (f"\n[partial result: search {cut}; narrow the path or pattern]"
+                if cut else "")
         if not matches:
-            return ToolResult(f"No files match {args['pattern']!r} under {root}.")
-        matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return ToolResult(f"No files match {args['pattern']!r} under {root}.{note}")
+
+        def mtime(p: Path) -> float:
+            try:
+                return p.stat().st_mtime
+            except OSError:
+                return 0.0
+        matches.sort(key=mtime, reverse=True)
         body = "\n".join(str(p) for p in matches[:400])
         if len(matches) > 400:
             body += f"\n... [{len(matches) - 400} more matches]"
-        return ToolResult(body)
+        return ToolResult(body + note)
 
 
 class Grep:
