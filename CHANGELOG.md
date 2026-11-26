@@ -3,6 +3,11 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.57.2
+- Bench instrumentation: every result row carries a `tool_trace`, one entry per tool call: `i`, `tool`, `args_head` (up to 160 characters: the command for `run_bash`, the path for file tools, `pattern @ path` for searches), `ok`, `error_head` (up to 200 characters of the error, failing calls only), `exit_code` when the output starts `exit N`, `cwd` when the call names one, and `red_test` for a `run_tests` red run. Blocked calls and unknown tools are traced too. The list is capped at 200 entries per rep, with the overflow counted in `tool_trace_dropped`. A failing call can now be classed as benign (grep no-match, a deliberately red test) or a real mistake (a guessed path), not only counted. Rows written before 2.57.2 load unchanged. Agent and tool behaviour is unchanged. `bench/runner.py` `trace_entry`.
+- Tests: `tests/test_bench_tool_trace.py` (a fake-backend run with a failing `run_bash` and a missing-file `read_file` records the command, exit code and error text, and the passing calls record `ok` with no error; the cap and truncation; blocked and red-test entries; old rows without the field still load).
+
+
 ## 2.57.1
 - Bench-harness correctness (parity G6 verifier findings): `36_long_context_needle`'s hidden test now compares every function except the one SKU under repair (a per-function digest), so a behaviourally-equivalent rewrite such as `(TAX + 1)` is accepted while any change to another function is still caught -- it no longer pins the whole file's sha256. `37_slow_build_step`'s `build.sh` stamps a nonce derived from `totals.py`, and the hidden test requires it, so a hand-written `report.txt` (which the prompt forbids) fails even with the right mean. The quick A/B task count is derived from the task tree (`bench.ab_compare.task_count`, `quick.all_task_dirs`) instead of the literal 35, so the 41-task suite is counted correctly in `QUICK_TASK_COUNT`, `QUICK_MIN_N` and `estimate()`.
 - Tests: `tests/test_bench_g6_tasks.py` adds the equivalent-fix-passes / other-function-fails cases (36), the hand-written-report-fails / built-report-passes cases (37), and a derived-count assertion.
