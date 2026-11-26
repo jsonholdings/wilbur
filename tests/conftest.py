@@ -222,42 +222,74 @@ def _test_named_sessions() -> set[str]:
         return set()
 
 
-def _snapshot(path: Path):
-    if not path.exists():
-        return None
-    stat = path.stat()
-    return (stat.st_mtime_ns, stat.st_size)
+# flaky-test-worktree-teardown (2.61.0): the guard used to compare the real
+# files' mtime/size before and after the suite. The owner's live Wilbur
+# writes its own history and config while a release suite runs, so that
+# check failed at session teardown -- reported on whichever test ran last
+# (tests/test_worktree.py::test_diff_reflects_branch_change in 2.51.1) --
+# in about half the full runs. A process-wide audit hook now records writes
+# made by THIS test process only; another process's writes are not ours.
+_GUARDED_REAL_PATHS = {str(_REAL_CONFIG_PATH), str(_REAL_HISTORY_PATH)}
+_GUARDED_NAMES = {Path(p).name for p in _GUARDED_REAL_PATHS}
+_REAL_PATH_WRITES: list[str] = []
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
+
+
+def _is_guarded(path) -> bool:
+    try:
+        name = os.fspath(path)
+    except TypeError:
+        return False
+    if isinstance(name, bytes):
+        name = os.fsdecode(name)
+    if os.path.basename(name) not in _GUARDED_NAMES:
+        return False
+    return os.path.abspath(name) in _GUARDED_REAL_PATHS
+
+
+def _audit_real_writes(event: str, args) -> None:
+    if event == "open":
+        path, mode, flags = args
+        if isinstance(path, int):
+            return
+        writes = (any(c in mode for c in "wax+") if isinstance(mode, str)
+                  else bool((flags or 0) & _WRITE_FLAGS))
+        if writes and _is_guarded(path):
+            _REAL_PATH_WRITES.append(os.fspath(path))
+    elif event in ("os.rename", "os.replace", "os.remove", "os.truncate"):
+        targets = args[:2] if event in ("os.rename", "os.replace") else args[:1]
+        for target in targets:
+            if _is_guarded(target):
+                _REAL_PATH_WRITES.append(f"{event} {os.fspath(target)}")
+
+
+sys.addaudithook(_audit_real_writes)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def guard_real_wilbur_home():
     """Session-wide control for `isolate_wilbur_home`: proves the real
-    ~/.config/wilbur/config.json and history file are byte- and
-    mtime-identical before and after the whole suite runs. A per-test
+    ~/.config/wilbur/config.json and history file are never opened for
+    writing, renamed or removed by this test process (audit hook above;
+    the owner's live Wilbur may write them meanwhile, and that is not a leak). A per-test
     monkeypatch fixture can itself be bypassed by a test that imports a
     path before the fixture patches it (as `test_configured_but_non_tool_
     capable_triggers_picker` did); this is the backstop that catches that
     class of regression even if a future test finds a new way around the
     per-test isolation.
     """
-    before_config = _snapshot(_REAL_CONFIG_PATH)
-    before_history = _snapshot(_REAL_HISTORY_PATH)
     before_sessions = _test_named_sessions()
+    writes_before = len(_REAL_PATH_WRITES)
     yield
     leaked_sessions = sorted(_test_named_sessions() - before_sessions)
     assert not leaked_sessions, (
         f"tests/conftest.py isolation failed: tests wrote {leaked_sessions} "
         f"into the real {_REAL_SESSIONS_DIR}"
     )
-    after_config = _snapshot(_REAL_CONFIG_PATH)
-    after_history = _snapshot(_REAL_HISTORY_PATH)
-    assert after_config == before_config, (
-        f"tests/conftest.py isolation failed: {_REAL_CONFIG_PATH} changed "
-        f"during the suite ({before_config} -> {after_config})"
-    )
-    assert after_history == before_history, (
-        f"tests/conftest.py isolation failed: {_REAL_HISTORY_PATH} changed "
-        f"during the suite ({before_history} -> {after_history})"
+    leaked_writes = _REAL_PATH_WRITES[writes_before:]
+    assert not leaked_writes, (
+        f"tests/conftest.py isolation failed: the test process wrote the "
+        f"owner's real files: {leaked_writes}"
     )
 
 

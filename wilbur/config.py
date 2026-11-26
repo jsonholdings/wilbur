@@ -260,10 +260,28 @@ class Config:
                     setattr(cfg, key, value)
         if not cfg.subagent_model:
             cfg.subagent_model = cfg.model
-        if cfg.kv_cache_type not in ("f16", "q8_0", "q4_0"):
-            raise ValueError(f"kv_cache_type {cfg.kv_cache_type!r} in {CONFIG_PATH}: "
-                             "use f16, q8_0 or q4_0 (match OLLAMA_KV_CACHE_TYPE)")
+        cfg.validate()
         return cfg
+
+    # (field, minimum): integer knobs whose use-sites clamp with max(); 2.61.0
+    # checks them once at load so a typo fails at startup, not mid-task.
+    _INT_MINIMUMS = (("tool_failure_block_at", 1), ("tool_failure_stop_at", 1),
+                     ("stuck_limit", 1), ("auto_continue_max", 0),
+                     ("empty_reply_retries", 0), ("runaway_content_chars", 0))
+
+    def validate(self) -> None:
+        """Fail fast on a config value no use-site can work with; clamp an
+        out-of-range integer to the minimum its use-site already enforces."""
+        if self.kv_cache_type not in ("f16", "q8_0", "q4_0"):
+            raise ValueError(f"kv_cache_type {self.kv_cache_type!r} in {CONFIG_PATH}: "
+                             "use f16, q8_0 or q4_0 (match OLLAMA_KV_CACHE_TYPE)")
+        for name, minimum in self._INT_MINIMUMS:
+            if not hasattr(self, name):
+                continue
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} {value!r} in {CONFIG_PATH}: must be a number")
+            setattr(self, name, max(minimum, int(value)))
 
     def save(self) -> None:
         data = asdict(self)

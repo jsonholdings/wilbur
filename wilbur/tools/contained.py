@@ -16,19 +16,27 @@ So every command now runs:
     unit name (catches children that called setsid), then the process group.
 Where a user systemd manager with the memory controller is not available
 (container, CI), it falls back to RLIMIT_AS plus the process-group kill.
+RLIMIT_AS caps VIRTUAL memory, not RSS, so the fallback cap is
+FALLBACK_AS_FACTOR x memory_max (32G for the 8G default): Go and JVM
+binaries reserve far more address space than they touch and failed at 8G.
+AddressSanitizer reserves terabytes of shadow memory and cannot run under any
+RLIMIT_AS at all; run ASan builds where a user systemd scope is available.
 """
 from __future__ import annotations
 
 import itertools
 import os
+import re
 import resource
 import signal
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass
 from functools import lru_cache
 
 DEFAULT_MEMORY_MAX = "8G"
+FALLBACK_AS_FACTOR = 4
 _counter = itertools.count()
 
 
@@ -37,6 +45,9 @@ class Completed:
     returncode: int
     stdout: str
     stderr: str
+    # Scoped runs: True/False from the scope's systemd Result (oom-kill or
+    # not). None when there was no scope (fallback) or it could not be read.
+    oom_killed: bool | None = None
 
 
 class Timeout(Exception):
@@ -88,14 +99,17 @@ def wrap(argv: list[str], memory_max: str, unit: str | None) -> list[str]:
     # The public mirror's CI (GitHub runner) turned `echo $$` into `$` and
     # was red from 2.44.1 to 2.54.0. A host whose systemd-run predates the
     # option (< 246) fails the scope_available() probe and falls back to RLIMIT.
-    return ["systemd-run", "--user", "--scope", "--quiet", "--collect",
+    # No --collect (2.61.0): a scope the kernel OOM-killed stays loaded as
+    # failed with Result=oom-kill until scope_oom_killed() reads it and
+    # resets it; a scope that ends cleanly is unloaded on its own.
+    return ["systemd-run", "--user", "--scope", "--quiet",
             "--expand-environment=no",
             f"--unit={unit}", "-p", f"MemoryMax={memory_max}",
             "-p", "MemorySwapMax=0", "--", *argv]
 
 
 def _rlimit_preexec(memory_max: str):
-    limit = _bytes(memory_max)
+    limit = _bytes(memory_max) * FALLBACK_AS_FACTOR
 
     def apply() -> None:
         resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
@@ -106,8 +120,12 @@ def stop(proc: subprocess.Popen, unit: str | None) -> None:
     """Stop everything the command started: the scope by exact name, then the
     process group, SIGTERM then SIGKILL."""
     if unit is not None:
-        subprocess.run(["systemctl", "--user", "kill", "--signal=SIGKILL", f"{unit}.scope"],
-                       capture_output=True, timeout=10)
+        try:
+            subprocess.run(["systemctl", "--user", "kill", "--signal=SIGKILL", f"{unit}.scope"],
+                           capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass  # systemctl missing or hung: the process-group kill below still runs
+        _reset_failed(unit)
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(proc.pid, sig)
@@ -118,6 +136,37 @@ def stop(proc: subprocess.Popen, unit: str | None) -> None:
             return
         except subprocess.TimeoutExpired:
             continue
+
+
+def _reset_failed(unit: str) -> None:
+    try:
+        subprocess.run(["systemctl", "--user", "reset-failed", f"{unit}.scope"],
+                       capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def scope_oom_killed(unit: str, returncode: int) -> bool | None:
+    """Ask systemd whether the kernel OOM-killed this command's scope, then
+    collect the unit. None when the answer could not be read."""
+    if returncode == 0:
+        return False
+    result = None
+    for _ in range(10):  # systemd may see the cgroup OOM event a moment after waitpid
+        try:
+            out = subprocess.run(
+                ["systemctl", "--user", "show", "-p", "Result", "--value", f"{unit}.scope"],
+                capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        result = out.stdout.strip()
+        if result == "oom-kill" or returncode not in (-9, 137):
+            break
+        time.sleep(0.1)
+    _reset_failed(unit)
+    if result == "oom-kill":
+        return True
+    return False if result else None
 
 
 def popen(argv: list[str], cwd: str, memory_max: str = DEFAULT_MEMORY_MAX,
@@ -144,7 +193,8 @@ def run(argv: list[str], cwd: str, timeout: float,
         # Ctrl-C: the command runs in its own session, so SIGINT never reached it.
         stop(proc, unit)
         raise
-    return Completed(proc.returncode, out or "", err or "")
+    oom = scope_oom_killed(unit, proc.returncode) if unit is not None else None
+    return Completed(proc.returncode, out or "", err or "", oom)
 
 
 def shell(command: str, cwd: str, timeout: float,
@@ -152,13 +202,25 @@ def shell(command: str, cwd: str, timeout: float,
     return run(["/bin/sh", "-c", command], cwd, timeout, memory_max)
 
 
-def oom_note(returncode: int, memory_max: str, output: str = "") -> str:
-    """A hint for the model when the command was killed (likely the cap)."""
-    # Kernel cgroup OOM sends SIGKILL; systemd's scope OOMPolicy=stop then
-    # SIGTERMs what is left, so /bin/sh itself often ends with -15. Under the
-    # RLIMIT_AS fallback (no user systemd, e.g. CI) there is no signal: the
-    # program fails its allocation instead (python: MemoryError, exit 1).
-    if returncode in (-9, -15, 137, 143) or (returncode != 0 and "MemoryError" in output):
+_UNCAUGHT_MEMORY_ERROR = re.compile(r"(?m)^MemoryError\b")
+
+
+def oom_note(returncode: int, memory_max: str, output: str = "",
+             oom_killed: bool | None = None) -> str:
+    """A hint for the model when the command was stopped by the memory cap.
+
+    Scoped runs pass `oom_killed` from the scope's own systemd Result, so a
+    command that exits on its own SIGTERM gets no cap hint (2.61.0). Without
+    a scope (RLIMIT_AS fallback, e.g. CI) there is no signal: the program
+    fails its allocation instead, so the hint fires on SIGKILL or on an
+    UNCAUGHT MemoryError (a traceback's last line), not on a test suite that
+    merely mentions or asserts MemoryError."""
+    if oom_killed is not None:
+        hit = oom_killed
+    else:
+        hit = returncode in (-9, 137) or (
+            returncode != 0 and bool(_UNCAUGHT_MEMORY_ERROR.search(output)))
+    if hit:
         return (f"\n[killed: the command was stopped, most likely by the {memory_max} "
                 "memory cap. Look for an unbounded loop or allocation.]")
     return ""

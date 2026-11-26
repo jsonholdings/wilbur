@@ -87,6 +87,25 @@ _SLASH_COMMANDS = (
 )
 
 
+
+def redacting_file_history(file_history_cls, path):
+    """prompt_toolkit FileHistory whose on-disk copy is redacted with
+    wilbur/redact.py (the same rules as saved sessions) and kept 0600.
+    The in-memory history (up-arrow recall this session) keeps what was
+    typed; only what reaches the file is redacted. 2.61.0: typed input was
+    the one persisted channel 2.60.0's session redaction did not cover."""
+    from .redact import redact_text, secret_values
+
+    class RedactingFileHistory(file_history_cls):
+        def store_string(self, string: str) -> None:
+            super().store_string(redact_text(string, secret_values()))
+            try:
+                os.chmod(self.filename, 0o600)
+            except OSError:
+                pass
+
+    return RedactingFileHistory(str(path))
+
 class Repl:
     def __init__(self, config: Config, cwd: str, restore: dict | None = None) -> None:
         self.config = config
@@ -437,7 +456,7 @@ class Repl:
         hist_path = HISTORY_PATH
         try:
             hist_path.parent.mkdir(parents=True, exist_ok=True)
-            history = FileHistory(str(hist_path))
+            history = redacting_file_history(FileHistory, hist_path)
         except OSError:
             history = None  # read-only home, etc. -- still usable, just no history
 

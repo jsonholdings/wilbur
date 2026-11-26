@@ -1,6 +1,7 @@
 """The agent loop: model -> tool calls -> results -> model, until it stops."""
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -206,6 +207,16 @@ class Agent:
         (2.51.1; owner 2026-11-23: the breaker re-tripped on every reply)."""
         self.state.consecutive_tool_failures = 0
         self.tool_circuit_tripped = False
+        # A typed line is not a keep-going nudge: the runaway-output streak
+        # starts over (2.61.0, wilbur-2400-fastfollow).
+        self._big_content_streak = 0
+
+    def begin_task(self) -> None:
+        """A new task (a `wilbur loop` goal) on this Agent: on top of a fresh
+        turn, the per-call failure ledger is cleared, so a call that failed
+        for the previous task is not hard-blocked for this one (2.61.0)."""
+        self.begin_user_turn()
+        self.state.failures.clear()
 
     def run(self, user_input: str) -> str:
         # The objective is captured verbatim once and never rewritten. Later
@@ -828,7 +839,14 @@ class Agent:
         args = call.arguments or {}
         for key in ("command", "file_path", "path", "pattern", "prompt"):
             if key in args:
-                return f"{key}={str(args[key])[:80]}"
+                sig = f"{key}={str(args[key])[:80]}"
+                if call.name in WRITE_TOOLS:
+                    # 2.61.0: a same-path retry with different content is a
+                    # different call, not a repeat for the breaker to block.
+                    body = json.dumps({k: v for k, v in sorted(args.items()) if k != key},
+                                      sort_keys=True, default=str)
+                    sig += f"#{hashlib.sha1(body.encode()).hexdigest()[:10]}"
+                return sig
         return ",".join(sorted(args))[:80]
 
     def _estimate_prompt(self) -> int:

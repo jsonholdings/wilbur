@@ -138,7 +138,10 @@ def run_goal_loop(
         # starts with a fresh tool-failure budget, like a typed REPL line, so a
         # breaker trip in turn N does not re-trip turn N+1 on its first failure.
         # The per-call ledger is kept, so an identical failing call stays blocked.
-        agent.begin_user_turn()
+        if turn == 1 and hasattr(agent, "begin_task"):
+            agent.begin_task()  # a new goal: the failure ledger starts empty too
+        else:
+            agent.begin_user_turn()
         try:
             reply = agent.run(prompt)
         except KeyboardInterrupt:
