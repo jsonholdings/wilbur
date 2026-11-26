@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.62.0
+- Compaction thrash (BACKLOG keep-working-regression-20261026, live W3 2026-11-26): a round of parallel reads whose results would push the prompt past the compaction budget no longer overflows it. Reads after the first in a round that would cross the budget are held back with a "[Not shown: ...]" result telling the model to act on what it has and request them again; the first read of a round always runs, and write/command results are always kept. On 2.61.0 twelve parallel reads (~56.8k tokens at num_ctx 32768) were compacted away before the model saw them and it re-read all twelve: 7 compactions, 96 reads, 0 edits in 359 s.
+- Tool-call parse errors: when Ollama cannot parse the tool call the model wrote (`ollama: XML syntax error ...`, `error parsing tool call ...`), the model call is retried up to 2 times with a harness note instead of ending the run (live W3: a 5-item task list stopped after item 4 on this error). Other server errors still raise as before.
+- Tests: `tests/test_compact_round_overflow.py`, `tests/test_tool_parse_retry.py` (each fails on 2.61.0, with controls).
+
+
 ## 2.61.0
 - Publish refusals: `scripts/publish.sh` refuses before touching origin or the mirror when tracked files have uncommitted changes, or when HEAD's `wilbur/__init__.py` version differs from the CHANGELOG top (a release commit that was refused or never made); `--preflight` runs only these checks (BACKLOG publish-on-refused-commit).
 - Publish gate output goes to a log file; on failure the FAILED/ERROR lines and the summary are printed instead of a silent exit 1 (BACKLOG publish-gate-hides-failures).

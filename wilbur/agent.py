@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -31,6 +32,10 @@ WRITE_TOOLS = {"write_file", "edit_file"}
 # reply should cost one round's wall time, not four.
 PARALLEL_READ_TOOLS = frozenset({"read_file", "grep", "glob", "list_files"})
 READ_BATCH_WORKERS = 4
+# Ollama's in-stream errors for a tool call it could not parse from the
+# model's output (qwen3 XML format, or JSON arguments).
+_TOOL_PARSE_ERROR = re.compile(r"^ollama: .*(XML syntax error|pars\w* tool call)", re.I | re.S)
+TOOL_PARSE_RETRIES = 2
 
 SYSTEM_PROMPT = """You are Wilbur, a coding agent working in a terminal on the user's machine.
 
@@ -266,15 +271,7 @@ class Agent:
             started = time.time()
             self.on_event("model_phase", {"phase": "reading", "tokens": sent_estimate})
             sent_think_off, think_off_next = think_off_next, False
-            reply = self.client.chat(
-                outgoing,
-                self.schema,
-                known_tools=self.known,
-                num_ctx=self.config.num_ctx,
-                temperature=self.config.temperature,
-                top_p=self.config.top_p,
-                **({"think": False} if sent_think_off else {}),
-            )
+            reply = self._chat_retrying_tool_parse(outgoing, sent_think_off)
             elapsed = time.time() - started
             if reply.prompt_tokens:
                 self._last_prompt_tokens = reply.prompt_tokens
@@ -424,7 +421,16 @@ class Agent:
                 if index not in prefetched:
                     prefetched.update(self._prefetch_reads(calls, index))
                 result = self._execute(call, prefetched.pop(index, None))
-                self.messages.append(self._tool_message(call, result))
+                message = self._tool_message(call, result)
+                if index and self._read_overflows_round(call, message):
+                    # 2.62.0 compaction thrash (live W3, 2026-11-26): twelve
+                    # parallel reads (~56.8k tokens) overflowed the budget, so
+                    # the next round compacted them away before the model saw
+                    # them and it re-read all twelve, 7 times in 6 minutes with
+                    # no edit. A read has no side effect: hold it back instead.
+                    message = self._tool_message(call, self._deferred_read_note(message))
+                    self.on_event("tool_deferred", {"name": call.name})
+                self.messages.append(message)
                 self.on_event("message", {})
             # Remaining calls of this round still run (a skipped call would
             # leave the transcript with a tool call and no result); the
@@ -882,8 +888,52 @@ class Agent:
     def client_model_name(self) -> str:
         return getattr(self.client, "model", "") or self.config.model
 
+    def _chat_retrying_tool_parse(self, outgoing: list[dict[str, Any]], think_off: bool) -> Any:
+        """One model call. When the model server cannot parse the tool call the
+        model wrote (live W3 2026-11-26: "ollama: XML syntax error on line 72:
+        element <function> closed by </parameter>" ended a 5-item run after
+        item 4), ask again with a note instead of stopping the run."""
+        for attempt in range(TOOL_PARSE_RETRIES + 1):
+            try:
+                return self.client.chat(
+                    outgoing,
+                    self.schema,
+                    known_tools=self.known,
+                    num_ctx=self.config.num_ctx,
+                    temperature=self.config.temperature,
+                    top_p=self.config.top_p,
+                    **({"think": False} if think_off else {}),
+                )
+            except RuntimeError as exc:
+                if attempt >= TOOL_PARSE_RETRIES or not _TOOL_PARSE_ERROR.search(str(exc)):
+                    raise
+                self.on_event("tool_parse_retry", {"error": str(exc)[:200], "attempt": attempt + 1})
+                outgoing = outgoing + [{"role": "user", "content": (
+                    "[harness] The model server could not parse your last tool call "
+                    f"({str(exc)[:160]}). Nothing ran. Re-issue it with well-formed "
+                    "arguments; split a very long file write into smaller edits.")}]
+        raise AssertionError("unreachable")
+
+    def _compact_budget(self) -> int:
+        return int(self.config.num_ctx * self.config.compact_at) - self.config.reserve_output
+
+    def _read_overflows_round(self, call: ToolCall, message: dict[str, Any]) -> bool:
+        """True when this (not first) read of a round would push the prompt
+        past the compaction budget, which would summarise the round's reads
+        away before the model ever reads them."""
+        if call.name not in PARALLEL_READ_TOOLS:
+            return False  # writes and commands already ran: keep their result
+        return self._prompt_size() + estimate_tokens([message]) > self._compact_budget()
+
+    def _deferred_read_note(self, message: dict[str, Any]) -> str:
+        return (f"[Not shown: this result (~{estimate_tokens([message]):,} tokens) would push the "
+                f"context past its budget (~{self._compact_budget():,} tokens) in this round, and "
+                "the round's results would be compacted away before you read them. Act on the "
+                "results you already have first (finish those files), then request this one "
+                "again. Read a few files per round, not all of them at once.]")
+
     def _maybe_compact(self, force: bool = False, reason: str = "budget") -> None:
-        budget = int(self.config.num_ctx * self.config.compact_at) - self.config.reserve_output
+        budget = self._compact_budget()
         used = self._prompt_size()
         if used < budget and not force:
             return

@@ -670,6 +670,12 @@ class Repl:
             print(ui.notice(
                 f"compacted context: {data['before_tokens']:,} -> "
                 f"{data['after_tokens']:,} tokens"))
+        elif kind == "tool_parse_retry":
+            print(ui.notice(f"model server could not parse a tool call -- asking again "
+                            f"({data.get('attempt', 1)})"))
+        elif kind == "tool_deferred":
+            print(ui.notice(f"held back {data.get('name', 'a read')}: this round's results "
+                            "would overflow the context"))
         elif kind == "team_reviewer_model":
             print(ui.notice(data.get("note", "")))
         elif kind == "message_injected":
