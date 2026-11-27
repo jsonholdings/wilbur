@@ -654,9 +654,13 @@ class OllamaClient:
         temperature: float = 0.15,
         top_p: float = 0.9,
         think: bool | None = None,
+        constrained: bool | None = None,
     ) -> Reply:
         """think=False asks the server for no reasoning at all (Ollama `think`);
-        the default leaves the model's own setting and applies think_budget."""
+        the default leaves the model's own setting and applies think_budget.
+        constrained=True forces one constrained turn and leaves `tools` out of
+        the payload: with `tools` present Ollama still runs its XML tool-call
+        parser on the output, which is the error this turn is retrying (R1)."""
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -669,9 +673,10 @@ class OllamaClient:
             payload["keep_alive"] = self.keep_alive
         if think is False:
             payload["think"] = False
-        if tools:
+        force_constrained = bool(constrained and tools)
+        if tools and not force_constrained:
             payload["tools"] = tools
-        constrained = bool(self.constrained_tool_calls and tools)
+        constrained = force_constrained or bool(self.constrained_tool_calls and tools)
         if constrained:
             payload["format"] = tool_call_schema(tools or [])
 

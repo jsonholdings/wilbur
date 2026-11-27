@@ -25,7 +25,7 @@ def _flaky(agent, client, errors):
 
 
 def test_parse_error_is_retried_with_a_note(make_agent):
-    agent, client = make_agent([say("all done")])
+    agent, client = make_agent([say("all done")], tool_call_mode="native")
     _flaky(agent, client, [XML_ERR])
     events = []
     agent.on_event = lambda kind, data: events.append((kind, data))

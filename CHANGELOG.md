@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.64.0
+- Tool-call parse errors fixed at the source (R1, `tool_call_mode`, default `auto`): when Ollama cannot parse the tool call the model wrote ("XML syntax error ... element <function> closed by </parameter>"), the same turn is asked again once in constrained mode: the `format` schema with the tool names, and no `tools` in the payload, so the server's XML tool-call parser never runs; Wilbur's own `parse_constrained_reply` reads the reply. If that also fails, the 2.62.0 note retry is the last resort. `tool_call_mode: "native"` keeps the 2.62.0 policy; any other value fails config validation. The `tool_parse_retry` event now carries `mode` (`constrained` or `note`). Not yet measured live: the rate on native vs constrained calls is owed to the M1 bench.
+- Bench rows carry `tool_parse_retries` (count of `tool_parse_retry` events); the B0 baseline (`docs/BENCH-B0-2026-11-26.md`) could not see retried parse errors without it.
+- Tests: `tests/test_tool_call_mode.py` (a fake backend that raises the XML error once: the retry is constrained and carries no note; a second failure falls back to the note; native mode never constrains; the forced constrained payload carries `format` and no `tools`; controls: a clean turn is never constrained and a default payload keeps `tools` with no `format`; the bench runner counts parse retries).
+
+
 ## 2.63.0
 - Compaction keeps unacted reads (R2, `compact_keep_unacted`, default on; BACKLOG keep-working-regression-20261026): compaction never summarises the newest round's tool results, and `read_file` results the model has not acted on yet (no later edit/write of that path, not read again since) are carried through verbatim instead of going to the prose summary, up to half of `num_ctx` together with the recent slice. Past that they become a file index (path, line span, "re-read with offset/limit"), so a re-read is targeted. Reads of files already edited are summarised as before. 2.62.0's round hold-back stays. Set `compact_keep_unacted: false` for the 2.62.0 policy.
 - Mirror hygiene (R0): `docs/PROGRAMMES-PLAN.md` (internal planning) and `changes/` are excluded from the public mirror; `docs/PARITY-ANALYSIS.md` and `docs/LIVE-CHECKS-*.md` stay public. `changes/README.md` holds the CHANGELOG fragment rule for the release train.

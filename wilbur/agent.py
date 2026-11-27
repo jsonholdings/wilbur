@@ -892,7 +892,11 @@ class Agent:
         """One model call. When the model server cannot parse the tool call the
         model wrote (live W3 2026-11-26: "ollama: XML syntax error on line 72:
         element <function> closed by </parameter>" ended a 5-item run after
-        item 4), ask again with a note instead of stopping the run."""
+        item 4), do not stop the run. tool_call_mode "auto" (R1) first asks the
+        same turn again in constrained mode, which skips the server's tool
+        parser; after that, and always in "native", ask again with a note."""
+        auto = getattr(self.config, "tool_call_mode", "auto") == "auto"
+        constrained_next = False
         for attempt in range(TOOL_PARSE_RETRIES + 1):
             try:
                 return self.client.chat(
@@ -903,11 +907,17 @@ class Agent:
                     temperature=self.config.temperature,
                     top_p=self.config.top_p,
                     **({"think": False} if think_off else {}),
+                    **({"constrained": True} if constrained_next else {}),
                 )
             except RuntimeError as exc:
                 if attempt >= TOOL_PARSE_RETRIES or not _TOOL_PARSE_ERROR.search(str(exc)):
                     raise
-                self.on_event("tool_parse_retry", {"error": str(exc)[:200], "attempt": attempt + 1})
+                constrained_next = auto and attempt == 0
+                self.on_event("tool_parse_retry", {
+                    "error": str(exc)[:200], "attempt": attempt + 1,
+                    "mode": "constrained" if constrained_next else "note"})
+                if constrained_next:
+                    continue  # same request, constrained decode
                 outgoing = outgoing + [{"role": "user", "content": (
                     "[harness] The model server could not parse your last tool call "
                     f"({str(exc)[:160]}). Nothing ran. Re-issue it with well-formed "

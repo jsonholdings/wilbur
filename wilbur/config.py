@@ -130,6 +130,11 @@ class Config:
     # actually enforced, independent of the model finishing a turn.
     subagent_timeout_s: int = 300
     constrained_tool_calls: bool = False  # opt-in: Ollama `format` schema constrains tool calls
+    # R1 (2.64.0): "auto" retries a turn whose tool call the server could not
+    # parse once in constrained mode (`format` schema, no `tools`, so Ollama's
+    # XML tool parser never runs), then falls back to the 2.62.0 note retry;
+    # "native" is the 2.62.0 policy (note retry only).
+    tool_call_mode: str = "auto"
     critic_pass: bool = False         # opt-in: one extra model call reviews each write
     tool_hints: bool = True           # one-time steer when a call took the expensive road (2.41.0)
     image_generation: bool = False    # opt-in generate_image tool (runs through gpu-queue)
@@ -282,6 +287,9 @@ class Config:
         if self.kv_cache_type not in ("f16", "q8_0", "q4_0"):
             raise ValueError(f"kv_cache_type {self.kv_cache_type!r} in {CONFIG_PATH}: "
                              "use f16, q8_0 or q4_0 (match OLLAMA_KV_CACHE_TYPE)")
+        if self.tool_call_mode not in ("auto", "native"):
+            raise ValueError(f"tool_call_mode {self.tool_call_mode!r} in {CONFIG_PATH}: "
+                             "use auto or native")
         for name, minimum in self._INT_MINIMUMS:
             if not hasattr(self, name):
                 continue
