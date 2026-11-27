@@ -173,6 +173,11 @@ class Agent:
             # Live phase for the status line while a streamed reply arrives.
             self.client.on_progress = (
                 lambda phase, info: self.on_event("model_phase", {"phase": phase, **info}))
+        if hasattr(self.client, "on_content"):
+            # U1a: each streamed content piece, for a live display. The
+            # "assistant" event still follows with the whole reply.
+            self.client.on_content = (
+                lambda text: self.on_event("assistant_delta", {"text": text}))
         self.schema = to_schema(registry)
         # The tool schema is sent with every call and counts against num_ctx.
         self._schema_tokens = int(len(json.dumps(self.schema, default=str)) / CHARS_PER_TOKEN)

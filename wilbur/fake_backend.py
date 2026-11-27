@@ -85,6 +85,11 @@ class FakeClient:
         self.seen: list[list[dict[str, Any]]] = []
         self.requests: list[dict[str, Any]] = []
         self._lock = threading.Lock()
+        # U1a: the same display hook OllamaClient has. Content is handed over
+        # in pieces of STREAM_PIECE chars, so a construct can split mid-piece.
+        self.on_content: Any = None
+
+    STREAM_PIECE = 7
 
     def __call__(self, *a: Any, **kw: Any) -> "FakeClient":
         # Lets a test patch an instance in where the `OllamaClient` class is
@@ -104,12 +109,20 @@ class FakeClient:
             self.requests.append({"tools": tools, "known_tools": known_tools, "options": options})
             raw = self.replies.pop(0) if self.replies else self.exhausted
         if isinstance(raw, Reply):
+            self._stream_out(raw.content)
             return raw
         turn = _parse_turn(raw)
         content, calls = turn["content"], turn["tool_calls"]
+        self._stream_out(content)
         if turn["recover"] and known_tools:
             calls, content = recover_tool_calls(content, known_tools)
         return Reply(content=content, tool_calls=calls, thinking=turn.get("thinking", ""))
+
+    def _stream_out(self, content: str) -> None:
+        if self.on_content is None or not content:
+            return
+        for i in range(0, len(content), self.STREAM_PIECE):
+            self.on_content(content[i:i + self.STREAM_PIECE])
 
     @classmethod
     def from_script(cls, path: str | Path) -> "FakeClient":

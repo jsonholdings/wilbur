@@ -431,6 +431,10 @@ class OllamaClient:
         # Called as on_progress(phase, info) while a streamed reply arrives:
         # phase is "thinking", "writing" or "done". Set by the Agent.
         self.on_progress: Any = None
+        # U1a: called as on_content(text) with each streamed content piece,
+        # in order, while the reply arrives. Display only: the Reply still
+        # carries the whole content. Set by the Agent.
+        self.on_content: Any = None
         self._clock = time.monotonic
 
     def _post(self, request: urllib.request.Request) -> dict[str, Any]:
@@ -617,6 +621,8 @@ class OllamaClient:
                     if phase != "writing":
                         phase = "writing"
                         self._progress("writing")
+                    if self.on_content is not None:
+                        self.on_content(message["content"])
                 tool_calls.extend(message.get("tool_calls") or [])
                 final = chunk  # a server that ignores stream=True sends one object
                 if chunk.get("done"):

@@ -253,6 +253,41 @@ class MarkdownStream:
         return _wrapped(line[len(indent):], indent, indent)
 
 
+class LiveReply:
+    """U1a: one round's reply shown as it streams, for a live display.
+
+    Leading whitespace is dropped (the finished-reply path strips it too).
+    With colour on, only complete lines are rendered, through MarkdownStream,
+    so a construct split mid-stream (a `**bold**` run, a fence marker, a table
+    row) is drawn once, whole, and the concatenation of every `feed` plus
+    `close` equals `markdown(text)` for any split of `text`. With colour off
+    the pieces pass through raw, as they arrive.
+    """
+
+    def __init__(self) -> None:
+        self._stream = MarkdownStream()
+        self.started = False
+        self.text = ""          # the raw reply seen so far, for the caller
+
+    def feed(self, chunk: str) -> str:
+        self.text += chunk
+        if not self.started:
+            chunk = chunk.lstrip()
+            if not chunk:
+                return ""
+            self.started = True
+        return self._stream.feed(chunk)
+
+    def close(self) -> str:
+        """The rest of the reply, ending in a newline when anything was shown."""
+        if not self.started:
+            return ""
+        if not _colour_on():
+            return "" if self.text.endswith("\n") else "\n"
+        tail = self._stream.flush()
+        return tail + "\n" if tail else ""
+
+
 def markdown(text: str) -> str:
     """Render a whole reply at once (the same path a stream takes)."""
     if not _colour_on():

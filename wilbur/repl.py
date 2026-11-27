@@ -618,9 +618,94 @@ class Repl:
                 _mark(runstate.WORKING)
             if spinner is not None:
                 spinner.resume()
+            if getattr(self, "_live_on", False):
+                self._live_flush()
+
+    # ---------------------------------------------------------------- #
+    # U1b: live streamed replies (config stream_replies, a tty only)
+
+    def _live_begin(self) -> None:
+        """Arm streaming for one main turn (not team or loop turns)."""
+        self._live_on = bool(getattr(self.config, "stream_replies", True)) and self._tty()
+        self._live = None
+        self._live_pending = ""
+        self._live_last: str | None = None
+
+    def _live_held(self) -> bool:
+        """The prompt owns the terminal: an approval question, or a line the
+        user is typing mid-turn (the spinner is paused for it)."""
+        if self._awaiting_approval.is_set():
+            return True
+        spinner = getattr(self, "_spinner", None)
+        return spinner is not None and spinner.held
+
+    def _live_flush(self, force: bool = False) -> None:
+        text = getattr(self, "_live_pending", "")
+        if not text or (self._live_held() and not force):
+            return
+        self._live_pending = ""
+        spinner = getattr(self, "_spinner", None)
+        if spinner is not None:
+            spinner.write_above(text)
+        else:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+
+    def _live_emit(self, text: str) -> None:
+        if text:
+            self._live_pending += text
+        self._live_flush()
+
+    def _live_delta(self, piece: str) -> None:
+        if not getattr(self, "_live_on", False):
+            return
+        from . import render
+        if self._live is None:
+            self._live = render.LiveReply()
+            self._live_shown = False
+        out = self._live.feed(piece)
+        if out and not self._live_shown:
+            self._live_shown = True
+            out = "\n" + out       # the blank line a finished reply gets
+        self._live_emit(out)
+
+    def _live_close(self, content: str | None) -> None:
+        live = getattr(self, "_live", None)
+        if live is None:
+            return
+        self._live = None
+        tail = live.close()
+        if tail and not getattr(self, "_live_shown", True):
+            tail = "\n" + tail
+        self._live_emit(tail)
+        if content is not None and live.started:
+            self._live_last = content
+
+    def _live_end(self) -> None:
+        """Turn over: whatever was held back is shown now, streaming disarmed."""
+        self._live_close(None)
+        self._live_flush(force=True)
+        self._live_on = False
+
+    def _print_reply(self, reply: str) -> None:
+        """The finished reply, unless it was already streamed whole. The
+        streamed copy is consumed, so a later loop or team reply is never
+        matched against it."""
+        last = getattr(self, "_live_last", None)
+        self._live_last = None
+        if not reply.strip():
+            return
+        if last is not None and last.strip() == reply.strip():
+            return
+        print()
+        print(ui.assistant(reply))
 
     def _on_event(self, kind: str, data: dict) -> None:
+        if kind == "assistant_delta":
+            self._live_delta(data.get("text", ""))
+            return
         if kind == "assistant":
+            self._live_close(data.get("content", ""))
             spinner = getattr(self, "_spinner", None)
             if spinner is not None:
                 spinner.set_phase(None)
@@ -683,6 +768,7 @@ class Repl:
                 f"compacted context: {data['before_tokens']:,} -> "
                 f"{data['after_tokens']:,} tokens"))
         elif kind == "tool_parse_retry":
+            self._live_close(None)
             print(ui.notice(f"model server could not parse a tool call -- asking again "
                             f"({data.get('attempt', 1)})"))
         elif kind == "tool_deferred":
@@ -941,6 +1027,7 @@ class Repl:
             self._rounds = 1
             self._last_progress = time.time()
             self._set_runstate(runstate.WORKING)
+            self._live_begin()
             try:
                 with spinner:
                     self.agent.begin_user_turn()
@@ -959,6 +1046,7 @@ class Repl:
                 self._enter_stopped(runstate.ERROR)
                 continue
             finally:
+                self._live_end()
                 self._turn_active.clear()
                 self._spinner = None
                 if self._gp is not None:
@@ -967,9 +1055,7 @@ class Repl:
             # persists on a clean quit is exactly the session you lose.
             self.sessions.save(self.session_id, self.cwd, self.agent.messages,
                                self.state, self.config.model)
-            if reply.strip():
-                print()
-                print(ui.assistant(reply))
+            self._print_reply(reply)
             print()
             self._enter_stopped(self._stop_reason or runstate.DONE)
             if self._is_idle():
@@ -1078,9 +1164,7 @@ class Repl:
                                      "-- stopping; type continue to carry on"))
                     self._log_progress("stopped", "horizon reached")
                     return stop(runstate.HORIZON, reply)
-                if reply.strip():
-                    print()
-                    print(ui.assistant(reply))
+                self._print_reply(reply)
                 tag = f"({n + 1}/{cap})" if cap else f"({n + 1})"
                 print(ui.notice(f"\u21bb continuing {tag} -- {reason}"))
 

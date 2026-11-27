@@ -257,6 +257,11 @@ class Config:
     # a harness note asks for independent reads in one reply. 0 = off.
     batch_nudge_after: int = 3
 
+    # --- terminal UX (lane B, programmes push 2026-11-28) ---
+    # U1: show the reply as it streams (complete lines, rendered), on a tty
+    # only; piped output still gets the finished reply once. False = 2.67.0.
+    stream_replies: bool = True
+
     # --- permissions ---
     auto_approve: list[str] = field(default_factory=lambda: [
         "read_file", "list_files", "glob", "grep", "todo_write",

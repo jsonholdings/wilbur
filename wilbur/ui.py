@@ -247,6 +247,9 @@ class Spinner:
         self.render = render
         self._stop = threading.Event()
         self._paused = threading.Event()
+        # U1b: one writer at a time on the spinner's line, so a streamed reply
+        # line and a redraw never interleave mid-escape.
+        self._draw = threading.Lock()
         self._thread: threading.Thread | None = None
         self._start = 0.0
         # The model call's live phase ("reading 48,813 tokens", "thinking",
@@ -298,6 +301,21 @@ class Spinner:
     def resume(self) -> None:
         self._paused.clear()
 
+    @property
+    def held(self) -> bool:
+        """True while something else owns the line (an approval prompt, a
+        line being typed): a streamed reply must hold back until resume()."""
+        return self._paused.is_set()
+
+    def write_above(self, text: str) -> None:
+        """U1b: print `text` (complete lines) where the spinner line is; the
+        next redraw puts the spinner back under it."""
+        with self._draw:
+            if self.render and not _NO_COLOR and self._thread is not None:
+                sys.stdout.write("\r\033[2K")
+            sys.stdout.write(text)
+            sys.stdout.flush()
+
     def _spin(self) -> None:
         i = 0
         while not self._stop.is_set():
@@ -313,9 +331,12 @@ class Spinner:
                     text = ""
                 if text:
                     extra = f"  {GREY}{text}{RESET}"
-            sys.stdout.write(
-                f"\r\033[2K{ACCENT}{glyph}{RESET} {GREY}{self.status_text()}{RESET}{extra}"
-            )
-            sys.stdout.flush()
+            with self._draw:
+                if self._paused.is_set():
+                    continue
+                sys.stdout.write(
+                    f"\r\033[2K{ACCENT}{glyph}{RESET} {GREY}{self.status_text()}{RESET}{extra}"
+                )
+                sys.stdout.flush()
             i += 1
             self._stop.wait(0.12)
