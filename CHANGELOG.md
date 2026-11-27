@@ -3,6 +3,12 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.63.0
+- Compaction keeps unacted reads (R2, `compact_keep_unacted`, default on; BACKLOG keep-working-regression-20261026): compaction never summarises the newest round's tool results, and `read_file` results the model has not acted on yet (no later edit/write of that path, not read again since) are carried through verbatim instead of going to the prose summary, up to half of `num_ctx` together with the recent slice. Past that they become a file index (path, line span, "re-read with offset/limit"), so a re-read is targeted. Reads of files already edited are summarised as before. 2.62.0's round hold-back stays. Set `compact_keep_unacted: false` for the 2.62.0 policy.
+- Mirror hygiene (R0): `docs/PROGRAMMES-PLAN.md` (internal planning) and `changes/` are excluded from the public mirror; `docs/PARITY-ANALYSIS.md` and `docs/LIVE-CHECKS-*.md` stay public. `changes/README.md` holds the CHANGELOG fragment rule for the release train.
+- Tests: `tests/test_compact_keep_unacted.py` (a policy-model reproduction of live run A at num_ctx 32768: with the switch on every module is delivered at most twice; the control with it off re-reads some 3 times), `tests/test_sync_mirror_private_docs.py` (with a control that PARITY-ANALYSIS.md is still mirrored).
+
+
 ## 2.62.0
 - Compaction thrash (BACKLOG keep-working-regression-20261026, live W3 2026-11-26): a round of parallel reads whose results would push the prompt past the compaction budget no longer overflows it. Reads after the first in a round that would cross the budget are held back with a "[Not shown: ...]" result telling the model to act on what it has and request them again; the first read of a round always runs, and write/command results are always kept. On 2.61.0 twelve parallel reads (~56.8k tokens at num_ctx 32768) were compacted away before the model saw them and it re-read all twelve: 7 compactions, 96 reads, 0 edits in 359 s.
 - Tool-call parse errors: when Ollama cannot parse the tool call the model wrote (`ollama: XML syntax error ...`, `error parsing tool call ...`), the model call is retried up to 2 times with a harness note instead of ending the run (live W3: a 5-item task list stopped after item 4 on this error). Other server errors still raise as before.

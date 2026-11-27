@@ -242,6 +242,13 @@ class Config:
     # (wilbur/redact.py). Env WILBUR_SECRET_FILES (os.pathsep-separated) adds more.
     secret_files: list[str] = field(default_factory=list)
 
+    # --- core reliability (lane A, programmes push 2026-11-28) ---
+    # R2: compaction keeps the newest round verbatim and keeps file reads the
+    # model has not acted on yet (no later edit/write of that path) instead of
+    # summarising them; past the budget it keeps a file index (path, lines,
+    # "re-read with offset"). False = the 2.62.0 policy.
+    compact_keep_unacted: bool = True
+
     # --- permissions ---
     auto_approve: list[str] = field(default_factory=lambda: [
         "read_file", "list_files", "glob", "grep", "todo_write",
