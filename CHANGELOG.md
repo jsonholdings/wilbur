@@ -3,6 +3,14 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.72.0
+- Display (U3): a tool result cut at 6 lines now says `... +N lines (ctrl-o or /expand)`. ctrl-o or `/expand` prints the last cut result in full, including a `read_file` shown only as its `Read N lines` summary. The key prints above the prompt and keeps what is being typed.
+- Display (U5): a reply's reasoning shows as one dim line, `∴ Thinking... (N lines, ctrl-r or /thinking)`. ctrl-r or `/thinking` prints it whole, wrapped to the terminal width. With streaming on it goes through the live channel, so it waits while the prompt owns the terminal. ctrl-r no longer starts prompt_toolkit's reverse history search; up-arrow recall is unchanged.
+- Keys come from one backend-neutral action table, `ui.KEY_ACTIONS` (action, key, slash command, help). The prompt_toolkit pump binds every entry, and the D3 input backend will map the same table.
+- Docs (E5): three ADRs in `docs/adr/` (gq lease, mirror allow-list, team mode). They are internal and excluded from the public mirror.
+- Tests: `tests/test_ui_expand_thinking.py` (both modes with colour on and off, the real ptk pump driving ctrl-o and ctrl-r through a pipe, controls: a short result has nothing to expand, a reply without reasoning prints no block); `tests/test_sync_mirror_private_docs.py` (the ADRs are never mirrored, with a control that they exist).
+
+
 ## 2.71.0
 - Correctness (E2, §18): a crash-recovery test kills a real `wilbur` REPL with SIGKILL while a `run_bash` tool call is running (fake backend, throwaway home). The documented recovery holds and no defect was found. run.json survives and reads `dead` (with `original_state: working`), `wilbur status --check` exits 1, the session saved mid-turn reloads with the interrupted call in it, `--resume` finishes a new turn and exits cleanly (run.json removed, the check back to 0), and the event log ends on whole JSON lines with the killed run's `tool_start` last and no `tool_end`, while the resumed run logs under a new run id.
 - Highlighting (U6): JS template literals across lines, JS regex literals (only where an operand is expected, so `a / b / c` stays division), YAML `|` and `>` block scalars, and C++ raw strings `R"delim(...)delim"`. Multi-line state uses one generic closer scheme.

@@ -73,6 +73,8 @@ HELP = """  Model
   /queue            show commands typed and queued during the current turn
   /queue clear      drop everything queued, without cancelling the live turn
   /agents           list in-flight and recent subagents (role, status, elapsed)
+  /expand           show the last cut tool result in full (ctrl-o)
+  /thinking         show the last reply's reasoning (ctrl-r)
 
   Other
   /help             this list
@@ -83,7 +85,7 @@ HELP = """  Model
 _SLASH_COMMANDS = (
     "/model", "/search", "/pull", "/context", "/turns", "/continue", "/retry", "/compact", "/tools",
     "/approve", "/team", "/loop", "/keepgoing", "/clear", "/cost", "/cd", "/queue", "/queue clear", "/agents",
-    "/help", "/restart", "/exit",
+    "/expand", "/thinking", "/help", "/restart", "/exit",
 )
 
 
@@ -454,6 +456,10 @@ class Repl:
             # Escape then Enter) inserts a line instead, for multi-line input.
             event.current_buffer.insert_text("\n")
 
+        # U3/U5: one binding per entry of the backend-neutral action table.
+        for action, (key, _command, _help) in ui.KEY_ACTIONS.items():
+            self._bind_action(bindings, key, action)
+
         hist_path = HISTORY_PATH
         try:
             hist_path.parent.mkdir(parents=True, exist_ok=True)
@@ -524,6 +530,29 @@ class Repl:
             self._ptk_session = None
             asyncio.set_event_loop(None)
             loop.close()
+
+    def _bind_action(self, bindings, key: str, action: str) -> None:
+        from prompt_toolkit.application import run_in_terminal
+
+        @bindings.add(key)
+        def _run(event) -> None:
+            # Printed above the prompt, which keeps what was being typed.
+            run_in_terminal(lambda: self._run_action(action))
+
+    def _run_action(self, action: str) -> None:
+        """U3/U5: the shared handler behind a key and its slash command."""
+        if action == "expand_result":
+            cut = getattr(self, "_last_cut", None)
+            if cut is None:
+                print(ui.notice("no cut tool result to expand"))
+                return
+            print(ui.tool_result(cut["output"], cut["error"], max_lines=10**9,
+                                 path=cut["path"]))
+        elif action == "show_thinking":
+            from . import render
+            block = render.thinking_block(getattr(self, "_last_thinking", "") or "",
+                                          expanded=True)
+            print(block or ui.notice("no reasoning in the last reply"))
 
     def _ptk_message(self):
         from prompt_toolkit.formatted_text import ANSI
@@ -657,6 +686,15 @@ class Repl:
             self._live_pending += text
         self._live_flush()
 
+    def _live_emit_line(self, text: str) -> None:
+        """A whole display line during a turn: through the live channel
+        (held back while the prompt owns the terminal) when streaming,
+        a plain print otherwise."""
+        if getattr(self, "_live_on", False):
+            self._live_emit(text + "\n")
+        else:
+            print(text)
+
     def _live_delta(self, piece: str) -> None:
         if not getattr(self, "_live_on", False):
             return
@@ -706,6 +744,14 @@ class Repl:
             self._live_delta(data.get("text", ""))
             return
         if kind == "assistant":
+            thinking = (data.get("thinking") or "").strip()
+            if thinking:
+                # U5: reasoning shows as one collapsed dim line; ctrl-r or
+                # /thinking prints it whole.
+                from . import render
+                self._last_thinking = thinking
+                self._live_emit_line(render.thinking_block(
+                    thinking, hint=ui.action_hint("show_thinking")))
             self._live_close(data.get("content", ""))
             spinner = getattr(self, "_spinner", None)
             if spinner is not None:
@@ -745,13 +791,19 @@ class Repl:
                     self._shown_todos = todos
                     print(ui.todo_checklist(todos))
             else:
-                summary = (ui.read_summary(data.get("output", ""), data.get("seconds"))
-                           if data.get("name") == "read_file" and not data.get("error")
+                output = data.get("output", "")
+                error = data.get("error", False)
+                path = ((data.get("args") or {}).get("path")
+                        if data.get("name") == "read_file" else None)
+                summary = (ui.read_summary(output, data.get("seconds"))
+                           if data.get("name") == "read_file" and not error
                            else None)
-                print(summary or ui.tool_result(data.get("output", ""), data.get("error", False),
-                                                seconds=data.get("seconds"),
-                                                path=(data.get("args") or {}).get("path")
-                                                if data.get("name") == "read_file" else None))
+                # U3: anything shown cut (a summary, or "... +N lines") can be
+                # expanded later with ctrl-o or /expand.
+                if summary or ui.is_cut(output, path=path):
+                    self._last_cut = {"output": output, "error": error, "path": path}
+                print(summary or ui.tool_result(output, error, seconds=data.get("seconds"),
+                                                path=path, expand_hint=True))
         elif kind == "model_phase":
             spinner = getattr(self, "_spinner", None)
             if spinner is not None:
@@ -1392,6 +1444,10 @@ class Repl:
                 print(f"  {mark}  {ui.c(name, ui.BOLD)}")
         elif cmd == "/agents":
             self._agents_command()
+        elif cmd == "/expand":
+            self._run_action("expand_result")
+        elif cmd == "/thinking":
+            self._run_action("show_thinking")
         elif cmd == "/approve":
             if arg in {"ask", "auto-edit", "all"}:
                 self.approve_mode = arg

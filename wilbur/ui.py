@@ -161,7 +161,8 @@ def todo_checklist(todos: list[dict[str, str]]) -> str:
 
 
 def tool_result(output: str, error: bool = False, max_lines: int = 6,
-                 seconds: float | None = None, path: str | None = None) -> str:
+                 seconds: float | None = None, path: str | None = None,
+                 expand_hint: bool = False) -> str:
     """`path` set (a read_file view) highlights the shown lines by language."""
     lines = output.strip("\n").splitlines() or ["(no output)"]
     if not path:
@@ -178,8 +179,34 @@ def tool_result(output: str, error: bool = False, max_lines: int = 6,
     for line in styled[1:]:
         out.append(c("     ", GREY) + line)
     if len(lines) > max_lines:
-        out.append(c(f"     ... +{len(lines) - max_lines} lines", DIM))
+        hint = f" ({action_hint('expand_result')})" if expand_hint else ""
+        out.append(c(f"     ... +{len(lines) - max_lines} lines{hint}", DIM))
     return "\n".join(out)
+
+
+def is_cut(output: str, max_lines: int = 6, path: str | None = None) -> bool:
+    """True when tool_result() would hide lines of this output."""
+    text = output.strip("\n") if path else output.strip()
+    return len(text.splitlines()) > max_lines
+
+
+# U3/U5: key actions, declared once and backend-neutral. The ptk pump maps
+# each key to its action today; D3's input backend maps the same table.
+# action name -> (key in prompt_toolkit notation, slash command, help text)
+KEY_ACTIONS: dict[str, tuple[str, str, str]] = {
+    "expand_result": ("c-o", "/expand", "show the last cut tool result in full"),
+    "show_thinking": ("c-r", "/thinking", "show the last reply's reasoning"),
+}
+
+
+def key_label(key: str) -> str:
+    """'c-o' -> 'ctrl-o' for hints and help."""
+    return "ctrl-" + key[2:] if key.startswith("c-") else key
+
+
+def action_hint(action: str) -> str:
+    key, command, _ = KEY_ACTIONS[action]
+    return f"{key_label(key)} or {command}"
 
 
 def status_bar(model: str, last_prompt_tokens: int, num_ctx: int, in_tokens: int,

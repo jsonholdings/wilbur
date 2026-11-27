@@ -444,3 +444,29 @@ def file_view_lines(lines: list[str], path: str) -> list[str]:
         else:
             out.append(ui.c(m.group(1), ui.GREY) + hl.line(m.group(2)))
     return out
+
+
+THINKING_MARK = "∴"
+
+
+def thinking_block(thinking: str, expanded: bool = False, hint: str = "") -> str:
+    """U5: the reply's reasoning as a dim block. Collapsed it is one line
+    ("∴ Thinking... (N lines, ctrl-r or /thinking)"); expanded it is the
+    whole text, indented under the same header. Empty reasoning -> ""."""
+    from . import ui
+    text = (thinking or "").strip()
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if not expanded:
+        detail = f"{len(lines)} line{'s' if len(lines) != 1 else ''}"
+        if hint:
+            detail += f", {hint}"
+        return ui.c(f"{THINKING_MARK} Thinking... ({detail})", ui.DIM)
+    room = max(ui.width() - 4, 20)
+    out = [ui.c(f"{THINKING_MARK} Thinking", ui.DIM)]
+    import textwrap
+    for line in lines:
+        for piece in textwrap.wrap(line, room) or [""]:
+            out.append(ui.c("  " + piece, ui.DIM))
+    return "\n".join(out)
