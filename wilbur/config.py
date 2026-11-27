@@ -256,6 +256,16 @@ class Config:
     # R3: after this many rounds in a row that each made one read-only call,
     # a harness note asks for independent reads in one reply. 0 = off.
     batch_nudge_after: int = 3
+    # R3b (2.70.0, off until M2 measures it): append the batching note once,
+    # after the first user turn of a session, before round 1.
+    batch_hint_first_turn: bool = False
+    # R3b: a reply whose only calls are todo_write gets a note in the tool
+    # result asking to send todo_write together with the next action.
+    todo_write_pair_hint: bool = False
+    # E3a/E3b (2.70.0): structured JSONL event log (wilbur.eventlog), 0600,
+    # beside the sessions dir; scalars and safe labels only, no model text.
+    event_log: bool = True
+    event_log_max_bytes: int = 5 * 1024 * 1024
 
     # --- terminal UX (lane B, programmes push 2026-11-28) ---
     # U1: show the reply as it streams (complete lines, rendered), on a tty

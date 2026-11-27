@@ -203,6 +203,7 @@ class Repl:
         )
         agent.inbox = self.inbox
         agent.ctx.inbox = self.inbox
+        agent.session_id = getattr(self, "session_id", "") or ""
         return agent
 
     def _start_inbox_watch(self) -> None:
@@ -1092,6 +1093,10 @@ class Repl:
         from . import keepgoing, progress
         def stop(reason: str, text: str) -> str:
             self._stop_reason = reason
+            # E3b: the keep-going stop, with its reason, in the event log.
+            log = getattr(self.agent, "log_event", None)
+            if log is not None:
+                log("stop", {"reason": str(reason)})
             return text
 
         if not getattr(self.config, "auto_continue", True):

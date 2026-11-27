@@ -85,6 +85,20 @@ BATCH_NUDGE = (
     "or searches, ask for all the independent ones in ONE reply: they run in "
     "parallel and cost one round instead of one each.")
 
+# R3b (2.70.0): the same advice up front, before round 1 (M1: the R3 nudge
+# came after 3 single reads, when most leading reads were already done).
+BATCH_HINT = (
+    "Harness note: before your first call, list every file and search this "
+    "task needs to start, and ask for all the independent ones in ONE reply: "
+    "they run in parallel and cost one round instead of one each.")
+
+# R3b: a reply that only updates the plan costs a whole round (M1:
+# 26_config_key_migration spent 4 rounds per rep on todo_write alone).
+TODO_PAIR_HINT = (
+    "Harness note: next time send todo_write in the same reply as your next "
+    "action (a read, an edit or a command), so the plan update costs no round "
+    "of its own.")
+
 # Asked with no tools, once, when the turn budget runs out. Kept off the
 # transcript (see `_limit_summary`) so a `/continue` sees the same context it
 # would have seen had the limit not been hit at all.
@@ -149,7 +163,21 @@ class Agent:
     ) -> None:
         self.config = config
         self.cwd = cwd
-        self.on_event = on_event or (lambda kind, data: None)
+        self._display_event = on_event or (lambda kind, data: None)
+        # E3b (2.70.0): every event also goes to the structured event log
+        # (wilbur.eventlog) when `event_log` is on; the display is unchanged.
+        self.session_id = ""        # set by the REPL; "" for a subagent/bench
+        self.run_id = ""            # new per run() call
+        self._log_round = 0
+        self.event_log = None
+        if getattr(config, "event_log", False):
+            try:
+                from .eventlog import EventLog
+                self.event_log = EventLog(max_bytes=getattr(config, "event_log_max_bytes",
+                                                             5 * 1024 * 1024))
+            except Exception:  # noqa: BLE001 -- a log that cannot open never blocks the Agent
+                self.event_log = None
+        self.on_event = self._emit
         # Cooperative cancellation: a subagent runs on its own daemon thread
         # (see tools/task.py), so a Ctrl-C on the main thread never reaches
         # it as a KeyboardInterrupt. Checking this flag between rounds and
@@ -210,6 +238,7 @@ class Agent:
         self._search_run = 0
         # R3: consecutive rounds whose reply held exactly one read-only call.
         self._single_read_rounds = 0
+        self._batch_hint_sent = False
         # Tool rules sit inside the static prefix: built once here from a
         # PATH probe cached per process, so the prefix never changes mid-session.
         rules = tool_rules_for(set(registry))
@@ -222,6 +251,23 @@ class Agent:
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
 
     # ------------------------------------------------------------------ #
+
+    def _emit(self, kind: str, data: dict) -> None:
+        if kind == "assistant":
+            self._log_round += 1
+        self.log_event(kind, data)
+        self._display_event(kind, data)
+
+    def log_event(self, kind: str, data: dict | None = None) -> None:
+        """E3b: one event to the structured log only (not the display); a
+        log fault never reaches the run."""
+        if self.event_log is None:
+            return
+        try:
+            self.event_log.write(kind, run_id=self.run_id, session_id=self.session_id,
+                                 round_no=self._log_round, data=data)
+        except Exception:  # noqa: BLE001 -- observability must never cost the run
+            pass
 
     def begin_user_turn(self) -> None:
         """A message the user typed (not a keep-going nudge) starts with a
@@ -247,6 +293,10 @@ class Agent:
         if not self.state.objective:
             self.state.objective = user_input
         self.messages.append({"role": "user", "content": user_input})
+        from .eventlog import new_run_id
+        self.run_id, self._log_round = new_run_id(), 0
+        self.log_event("run_start", {"mode": "agent"})
+        self._maybe_batch_hint()
         final = ""
         empty_retries = 0
         # True when the one empty-reply retry ALSO came back empty: keep-going
@@ -439,6 +489,9 @@ class Agent:
                 if index not in prefetched:
                     prefetched.update(self._prefetch_reads(calls, index))
                 result = self._execute(call, prefetched.pop(index, None))
+                if index == len(calls) - 1 and self._todo_only_round(calls):
+                    result = f"{result}\n\n{TODO_PAIR_HINT}"
+                    self.on_event("todo_pair_hint", {"calls": len(calls)})
                 message = self._tool_message(call, result)
                 if index and self._read_overflows_round(call, message):
                     # 2.62.0 compaction thrash (live W3, 2026-11-26): twelve
@@ -473,6 +526,7 @@ class Agent:
             final = self._limit_summary()
             self.on_event("limit", {"turns": self.config.max_turns})
 
+        self.log_event("run_end", {"rounds": self._log_round, "chars": len(final or "")})
         return final
 
     # ------------------------------------------------------------------ #
@@ -639,6 +693,24 @@ class Agent:
         if call.call_id:
             msg["tool_call_id"] = call.call_id
         return msg
+
+    def _maybe_batch_hint(self) -> None:
+        """R3b: the batching note once per Agent, right after the first user
+        turn, so the model batches from round 1 (the R3 nudge arrives after
+        most leading reads). Appended, so the prompt prefix is kept."""
+        if not getattr(self.config, "batch_hint_first_turn", False) or self._batch_hint_sent:
+            return
+        self._batch_hint_sent = True
+        if sum(1 for m in self.messages if m.get("role") == "user") != 1:
+            return  # a resumed session is past its first turn
+        self.messages.append({"role": "user", "content": BATCH_HINT})
+        self.on_event("batch_hint", {})
+
+    def _todo_only_round(self, calls: list[ToolCall]) -> bool:
+        """R3b: True when every call of the reply is todo_write (a round
+        spent on the plan alone) and the pairing hint is switched on."""
+        return (bool(getattr(self.config, "todo_write_pair_hint", False)) and bool(calls)
+                and all(c.name == "todo_write" for c in calls))
 
     def _note_single_read_round(self, calls: list[ToolCall]) -> None:
         """R3: after `batch_nudge_after` single-read rounds in a row, append
