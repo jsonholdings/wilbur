@@ -15,7 +15,10 @@ input unchanged, so piped output and logs stay byte-for-byte raw.
 from __future__ import annotations
 
 import difflib
+import os
 import re
+import textwrap
+from pathlib import Path
 
 from . import ui
 from .highlight import Highlighter, normalize_lang
@@ -44,6 +47,40 @@ _INLINE = re.compile(
 )
 
 
+# U4 (2.66.0): `path:line` (or `path:line:col`) in prose and inline code
+# becomes an OSC 8 file:// link when the path is a real file under the
+# project root (or absolute). The visible text is unchanged, so terminals
+# without OSC 8 show exactly what the model wrote.
+_FILE_REF = re.compile(
+    r"(?<![\w/.~:-])((?:\.{0,2}/)?(?:[\w.-]+/)*[\w-][\w.-]*\.[A-Za-z0-9]+)"
+    r":(\d+)(?::\d+)?(?![\w:])")
+# The Repl points this at its project root (it can differ from the process
+# cwd after /cd); None means the process cwd.
+link_root: str | None = None
+
+
+def _file_url(path: str) -> str | None:
+    candidate = Path(path) if os.path.isabs(path) else Path(link_root or os.getcwd()) / path
+    try:
+        resolved = candidate.resolve()
+        return resolved.as_uri() if resolved.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
+def link_files(text: str) -> str:
+    """Wrap every existing `path:line` in an OSC 8 file:// hyperlink."""
+    if ":" not in text:
+        return text
+
+    def sub(m: re.Match) -> str:
+        url = _file_url(m.group(1))
+        if url is None:
+            return m.group(0)
+        return f"\033]8;;{url}\033\\{m.group(0)}\033]8;;\033\\"
+    return _FILE_REF.sub(sub, text)
+
+
 def _colour_on() -> bool:
     return not ui._NO_COLOR
 
@@ -53,14 +90,16 @@ def _wrap(text: str, *codes: str) -> str:
 
 
 def inline(text: str) -> str:
-    """Bold, italic, `code` and [links](url) inside one line."""
-    if not _colour_on() or not any(ch in text for ch in "`*_["):
+    """Bold, italic, `code`, [links](url) and path:line file links in one line."""
+    if not _colour_on():
         return text
+    if not any(ch in text for ch in "`*_["):
+        return link_files(text)
 
     def sub(m: re.Match) -> str:
         tok = m.group(0)
         if m.lastgroup == "code":
-            return _wrap(tok[1:-1], CODE)
+            return _wrap(link_files(tok[1:-1]), CODE)
         if m.lastgroup == "bold":
             return ui.BOLD + inline(tok[2:-2]).replace(ui.RESET, ui.RESET + ui.BOLD) + ui.RESET
         if m.lastgroup == "italic":
@@ -71,7 +110,35 @@ def inline(text: str) -> str:
         # (zero width) in those that do not.
         linked = f"\033]8;;{url}\033\\" + _wrap(label, LINK) + "\033]8;;\033\\"
         return linked if label == url else linked + _wrap(f" ({url})", ui.GREY)
-    return _INLINE.sub(sub, text)
+    out: list[str] = []
+    pos = 0
+    for m in _INLINE.finditer(text):
+        out.append(link_files(text[pos:m.start()]))
+        out.append(sub(m))
+        pos = m.end()
+    out.append(link_files(text[pos:]))
+    return "".join(out)
+
+
+def _wrapped(body: str, first: str, rest: str, style=None) -> str:
+    """U4: word-wrap one prose line at ui.width() with a hanging indent.
+
+    `first` (may hold colour codes) starts line one; `rest` (plain spaces)
+    starts every later line. Inline markup is never split across lines: its
+    spaces are protected while wrapping. A word longer than the width stays
+    whole. `style` renders each piece (default: inline)."""
+    render_piece = style or inline
+    width = ui.width()
+    lead = ui.visible_width(first)
+    if lead + len(body) <= width:
+        return first + render_piece(body)
+    protected = _INLINE.sub(lambda m: m.group(0).replace(" ", "\x00"), body)
+    pieces = textwrap.wrap(protected, width=max(10, width - lead), break_long_words=False,
+                           break_on_hyphens=False) or [""]
+    lines = []
+    for index, piece in enumerate(pieces):
+        lines.append((first if index == 0 else rest) + render_piece(piece.replace("\x00", " ")))
+    return "\n".join(lines)
 
 
 def _split_cells(row: str) -> list[str]:
@@ -171,13 +238,19 @@ class MarkdownStream:
             return ui.c("─" * min(40, ui.width()), ui.GREY)
         m = _BULLET.match(line)
         if m:
-            return m.group(1) + ui.c("•", ui.ACCENT) + " " + inline(m.group(2))
+            indent = m.group(1)
+            return _wrapped(m.group(2), indent + ui.c("•", ui.ACCENT) + " ", indent + "  ")
         m = _NUMBERED.match(line)
         if m:
-            return m.group(1) + ui.c(m.group(2), ui.ACCENT) + " " + inline(m.group(3))
+            indent, num = m.group(1), m.group(2)
+            return _wrapped(m.group(3), indent + ui.c(num, ui.ACCENT) + " ",
+                            indent + " " * (len(num) + 1))
         if line.startswith(">"):
-            return ui.c("▎", ui.GREY) + ui.c(inline(line[1:].lstrip()), ITALIC)
-        return inline(line)
+            bar = ui.c("▎", ui.GREY)
+            return _wrapped(line[1:].lstrip(), bar, bar,
+                            style=lambda piece: ui.c(inline(piece), ITALIC))
+        indent = line[:len(line) - len(line.lstrip(" "))]
+        return _wrapped(line[len(indent):], indent, indent)
 
 
 def markdown(text: str) -> str:

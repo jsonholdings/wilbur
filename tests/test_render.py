@@ -123,9 +123,12 @@ def test_table_at_end_of_stream_is_flushed(colour):
     assert "│" in out and "1" in strip(out) and "2" in strip(out)
 
 
-def test_very_long_line_is_kept_whole(colour):
+def test_very_long_line_keeps_every_word(colour):
+    """U4 wraps prose at ui.width(); no word is lost or split."""
     line = "word " * 5000
-    assert strip(render.markdown(line)) == line
+    out = strip(render.markdown(line)).split("\n")
+    assert " ".join(out).split() == line.split()
+    assert all(len(row) <= ui.width() for row in out)
 
 
 def test_render_speed_2000_line_reply(colour):

@@ -72,7 +72,18 @@ Safety rules (the owner's global rules that apply to any coding agent):
   shows it in the same change.
 
 Be concise. Report what is now true and what it unblocks, not how you got there.
-When you have finished the task, say so plainly and stop calling tools."""
+When you have finished the task, say so plainly and stop calling tools.
+
+Fewer rounds: put all independent reads and greps in ONE reply."""
+
+# R3 (2.66.0): appended only, never edited above, so the cached prompt prefix
+# of a 2.65.0 session is unchanged (a tail rewrite re-reads ~40k tokens).
+# The harness note goes in after `batch_nudge_after` rounds in a row that each
+# made one read-only call (B0: 8.1 rounds per rep, rounds ~= calls).
+BATCH_NUDGE = (
+    "The last {n} rounds each made one read or search. If you need more files "
+    "or searches, ask for all the independent ones in ONE reply: they run in "
+    "parallel and cost one round instead of one each.")
 
 # Asked with no tools, once, when the turn budget runs out. Kept off the
 # transcript (see `_limit_summary`) so a `/continue` sees the same context it
@@ -192,6 +203,8 @@ class Agent:
         # session, and the current run of consecutive search calls.
         self._hints_given: set[str] = set()
         self._search_run = 0
+        # R3: consecutive rounds whose reply held exactly one read-only call.
+        self._single_read_rounds = 0
         # Tool rules sit inside the static prefix: built once here from a
         # PATH probe cached per process, so the prefix never changes mid-session.
         rules = tool_rules_for(set(registry))
@@ -435,6 +448,7 @@ class Agent:
             # Remaining calls of this round still run (a skipped call would
             # leave the transcript with a tool call and no result); the
             # message is injected right after this round instead.
+            self._note_single_read_round(calls)
             if cancelled_mid_round:
                 final = "Cancelled by user."
                 self.on_event("cancelled", {})
@@ -620,6 +634,21 @@ class Agent:
         if call.call_id:
             msg["tool_call_id"] = call.call_id
         return msg
+
+    def _note_single_read_round(self, calls: list[ToolCall]) -> None:
+        """R3: after `batch_nudge_after` single-read rounds in a row, append
+        one harness note asking for batched reads; the streak then restarts.
+        Appended after the round's results, so the prompt prefix is kept."""
+        threshold = self.config.batch_nudge_after
+        if len(calls) == 1 and calls[0].name in PARALLEL_READ_TOOLS:
+            self._single_read_rounds += 1
+        else:
+            self._single_read_rounds = 0
+        if threshold and self._single_read_rounds >= threshold:
+            self._single_read_rounds = 0
+            self.messages.append({"role": "user",
+                                  "content": BATCH_NUDGE.format(n=threshold)})
+            self.on_event("batch_nudge", {"rounds": threshold})
 
     def _parallel_read_run(self, calls: list[ToolCall], start: int) -> list[int]:
         """Indexes of the contiguous run of parallel-safe read calls starting

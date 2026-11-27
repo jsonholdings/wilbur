@@ -794,10 +794,13 @@ class Repl:
         if titled:
             sys.stdout.write(runstate.start_title(str(self.cwd), self.config.model))
             sys.stdout.flush()
+        from . import render
+        saved_link_root, render.link_root = render.link_root, str(self.cwd)
         try:
             self._start_inbox_watch()
             return self._run_loop()
         finally:
+            render.link_root = saved_link_root
             if getattr(self, "_gp", None) is not None:
                 # hand the GPU back and unload the model only at exit; a
                 # restart keeps it resident so the new process reuses the
@@ -1355,6 +1358,8 @@ class Repl:
             print(ui.error(f"/cd: {target} is not a directory"))
             return
         self.cwd = str(target)
+        from . import render
+        render.link_root = self.cwd  # U4: path:line links resolve in the new root
         self.agent.cwd = self.cwd
         self.agent.ctx.cwd = self.cwd
         self.agent.set_system_extra(self._system_extra())

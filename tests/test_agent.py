@@ -155,7 +155,8 @@ def test_turn_limit_asks_for_a_summary_without_touching_the_transcript(make_agen
     endless = [Reply(content="", tool_calls=[call("read_file", path="a.txt")])
                for _ in range(3)]
     summary = say("Did: read a.txt twice. Left: nothing verified. Next: run the tests.")
-    a, client = make_agent(endless + [summary], max_turns=3)
+    # batch_nudge_after=0: the R3 single-read note would add a 3rd-round message.
+    a, client = make_agent(endless + [summary], max_turns=3, batch_nudge_after=0)
 
     before = len(a.messages)
     final = a.run("loop forever")

@@ -253,6 +253,9 @@ class Config:
     # summarising them; past the budget it keeps a file index (path, lines,
     # "re-read with offset"). False = the 2.62.0 policy.
     compact_keep_unacted: bool = True
+    # R3: after this many rounds in a row that each made one read-only call,
+    # a harness note asks for independent reads in one reply. 0 = off.
+    batch_nudge_after: int = 3
 
     # --- permissions ---
     auto_approve: list[str] = field(default_factory=lambda: [
@@ -279,7 +282,8 @@ class Config:
     # checks them once at load so a typo fails at startup, not mid-task.
     _INT_MINIMUMS = (("tool_failure_block_at", 1), ("tool_failure_stop_at", 1),
                      ("stuck_limit", 1), ("auto_continue_max", 0),
-                     ("empty_reply_retries", 0), ("runaway_content_chars", 0))
+                     ("empty_reply_retries", 0), ("runaway_content_chars", 0),
+                     ("batch_nudge_after", 0))
 
     def validate(self) -> None:
         """Fail fast on a config value no use-site can work with; clamp an

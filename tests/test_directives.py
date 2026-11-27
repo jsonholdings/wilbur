@@ -71,7 +71,9 @@ def test_prompt_stays_inside_the_token_budget():
     assert len(full) < BASELINE_CHARS
     assert int(len(full) / CHARS_PER_TOKEN) < 1598
     # 2.41.1 added the write-in-parts rule: within +3% of 2.41.0's 5,289 chars.
-    assert len(full) <= 5289 * 1.03, len(full)
+    # 2.66.0 (R3) appended one batching line, append-only for prompt
+    # checkpoints: within +4.5% of 2.41.0's 5,289 chars.
+    assert len(full) <= 5289 * 1.045, len(full)
 
 
 def test_host_probe_is_cached_so_the_prefix_cannot_change():
