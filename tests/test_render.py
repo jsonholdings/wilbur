@@ -208,7 +208,6 @@ def test_file_view_highlights_after_gutter(colour):
     out = render.file_view_lines(lines, "x.py")
     assert [strip(line) for line in out] == lines
     assert Highlighter("python").line("def f():") in out[0]
-    assert render.file_view_lines(lines, "x.unknownext") == lines
 
 
 def test_status_bar(plain):

@@ -21,7 +21,7 @@ def _plain(monkeypatch):
 
 def test_tool_call_renders_name_and_summary_without_ansi():
     out = ui.tool_call("run_bash", "ls -la")
-    assert "run_bash" in out
+    assert "Bash" in out
     assert "(ls -la)" in out
     assert ui.BULLET in out
     assert "\x1b" not in out

@@ -7,6 +7,7 @@ accent colour.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 import threading
@@ -114,9 +115,49 @@ def _shorten(text: str, limit: int) -> str:
     return text if len(text) <= limit else "..." + text[-(limit - 3):]
 
 
+# U2 (2.65.0): Claude-Code-style headers, `Read(path)` rather than `read_file(path)`.
+# A tool without a label (MCP, a plugin) keeps its own name.
+TOOL_LABELS = {"read_file": "Read", "write_file": "Write", "edit_file": "Update",
+               "list_files": "List", "glob": "Glob", "grep": "Search", "run_bash": "Bash",
+               "run_tests": "Test", "todo_write": "Update Todos", "task": "Task",
+               "generate_image": "Image", "list_skills": "Skills", "load_skill": "Skill"}
+STRIKE = "\033[9m"
+_NUMBERED_LINE = re.compile(r"^\s*\d+\t")
+
+
 def tool_call(name: str, summary: str, recovered: bool = False) -> str:
     tag = c(" (recovered)", DIM) if recovered else ""
-    return c(BULLET, ACCENT) + " " + c(name, BOLD) + c(f"({summary})", GREY) + tag
+    label = TOOL_LABELS.get(name, name)
+    args = c(f"({summary})", GREY) if summary else ""
+    return c(BULLET, ACCENT) + " " + c(label, BOLD) + args + tag
+
+
+def read_summary(output: str, seconds: float | None = None) -> str | None:
+    """`Read 120 lines` for a read_file result, in place of the file's text.
+    None when the output is not a numbered view (empty file, past the end)."""
+    count = sum(1 for line in output.splitlines() if _NUMBERED_LINE.match(line))
+    if not count:
+        return None
+    timing = c(f" ({seconds:.1f}s)", DIM) if seconds is not None else ""
+    word = "line" if count == 1 else "lines"
+    return c("  " + BRANCH + "  ", GREY) + "Read " + c(str(count), BOLD) + f" {word}" + timing
+
+
+def todo_checklist(todos: list[dict[str, str]]) -> str:
+    """The plan as a checklist: ☐ pending, bold ☐ in progress, ☒ struck through
+    when completed. Plain marks survive NO_COLOR, so the state still reads."""
+    rows = []
+    for i, todo in enumerate(todos):
+        status, task = todo.get("status", "pending"), todo.get("task", "")
+        if status == "completed":
+            text = c("☒ " + task, GREY, STRIKE)
+        elif status == "in_progress":
+            text = c("☐ " + task, BOLD)
+        else:
+            text = "☐ " + task
+        lead = "  " + BRANCH + "  " if i == 0 else "     "
+        rows.append(c(lead, GREY) + text)
+    return "\n".join(rows)
 
 
 def tool_result(output: str, error: bool = False, max_lines: int = 6,

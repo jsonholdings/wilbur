@@ -139,7 +139,12 @@ class MarkdownStream:
         for line in lines:
             if self._fence is not None:
                 stripped = line.strip()
-                if stripped.startswith(self._fence) and stripped.strip(self._fence[0]) == "":
+                # A fence only closes on a line of the SAME character with at
+                # least as many of them: a 4-backtick fence must not close on
+                # a 3-backtick line (that line stays inside the block).
+                if (stripped.startswith(self._fence)
+                        and stripped.strip(self._fence[0]) == ""
+                        and len(stripped) >= len(self._fence)):
                     self._fence, self._hl = None, None
                     yield ui.c(line, ui.DIM)
                 else:
@@ -187,10 +192,58 @@ def markdown(text: str) -> str:
 
 # ---------------------------------------------------------------- diffs
 
-def diff_counts(old: str, new: str) -> tuple[int, int]:
+# U8 (2.65.0): diff fast path. SequenceMatcher with autojunk=False is quadratic
+# on lines that repeat ("", "}", "end"): a 2,000-line rewrite of brace-heavy code
+# took 48 s on 2.64.0 before the result rendered. Lines are interned to ints,
+# the common head and tail are trimmed first, the exact matcher runs only while
+# the changed middle is small, larger middles use autojunk (popular lines junked,
+# still a valid edit script), and past DIFF_INPUT_CAP lines the middle is one
+# replace. Budget: a 2,000-line rewrite renders in under 10 ms.
+DIFF_EXACT_CAP = 250_000      # len(old middle) * len(new middle)
+DIFF_INPUT_CAP = 20_000       # lines per side before the middle is one replace
+
+
+def _diff_opcodes(a: list[str], b: list[str]) -> list[tuple[str, int, int, int, int]]:
+    ids: dict[str, int] = {}
+    ia = [ids.setdefault(line, len(ids)) for line in a]
+    ib = [ids.setdefault(line, len(ids)) for line in b]
+    head = 0
+    limit = min(len(ia), len(ib))
+    while head < limit and ia[head] == ib[head]:
+        head += 1
+    tail = 0
+    while tail < limit - head and ia[-1 - tail] == ib[-1 - tail]:
+        tail += 1
+    ma, mb = ia[head:len(ia) - tail], ib[head:len(ib) - tail]
+    if not ma and not mb:
+        middle = []
+    elif not ma or not mb or max(len(ma), len(mb)) > DIFF_INPUT_CAP:
+        op = "insert" if not ma else "delete" if not mb else "replace"
+        middle = [(op, 0, len(ma), 0, len(mb))]
+    else:
+        exact = len(ma) * len(mb) <= DIFF_EXACT_CAP
+        middle = difflib.SequenceMatcher(None, ma, mb, autojunk=not exact).get_opcodes()
+    ops: list[tuple[str, int, int, int, int]] = []
+    if head:
+        ops.append(("equal", 0, head, 0, head))
+    for op, i1, i2, j1, j2 in middle:
+        ops.append((op, i1 + head, i2 + head, j1 + head, j2 + head))
+    if tail:
+        ops.append(("equal", len(ia) - tail, len(ia), len(ib) - tail, len(ib)))
+    return ops or [("equal", 0, 0, 0, 0)]
+
+
+def _grouped(ops: list[tuple[str, int, int, int, int]], context: int):
+    matcher = difflib.SequenceMatcher(None)
+    matcher.opcodes = ops     # get_grouped_opcodes groups whatever get_opcodes returns
+    return matcher.get_grouped_opcodes(context)
+
+
+def diff_counts(old: str, new: str, ops=None) -> tuple[int, int]:
     added = removed = 0
-    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(
-            None, old.splitlines(), new.splitlines(), autojunk=False).get_opcodes():
+    if ops is None:
+        ops = _diff_opcodes(old.splitlines(), new.splitlines())
+    for op, i1, i2, j1, j2 in ops:
         if op in ("replace", "delete"):
             removed += i2 - i1
         if op in ("replace", "insert"):
@@ -206,7 +259,7 @@ def diff_summary(added: int, removed: int) -> str:
 
 
 def diff_lines(old: str, new: str, start: int = 1, context: int = 2,
-               lang: str | None = None, max_lines: int = 40) -> list[str]:
+               lang: str | None = None, max_lines: int = 40, ops=None) -> list[str]:
     """Numbered, coloured diff rows: removed lines red with the OLD line
     number, added lines green with the NEW one, `context` unchanged lines
     around each change, and `...` between distant hunks."""
@@ -224,7 +277,7 @@ def diff_lines(old: str, new: str, start: int = 1, context: int = 2,
         bg, fg = (ADD_BG, ADD_FG) if sign == "+" else (DEL_BG, DEL_FG)
         return _wrap(f"{num:>{num_w}} ", ui.GREY) + _wrap(f"{sign} {body}", bg, fg)
 
-    groups = difflib.SequenceMatcher(None, a, b, autojunk=False).get_grouped_opcodes(context)
+    groups = _grouped(ops if ops is not None else _diff_opcodes(a, b), context)
     for g_index, group in enumerate(groups):
         if g_index:
             rows.append(ui.c(" " * num_w + "  ...", ui.DIM))
@@ -249,11 +302,12 @@ def diff_view(path: str, old: str, new: str, start: int = 1, created: bool = Fal
             13 - old line
             13 + new line
     """
-    added, removed = diff_counts(old, new)
+    ops = _diff_opcodes(old.splitlines(), new.splitlines())
+    added, removed = diff_counts(old, new, ops)
     verb = "Created" if created else "Updated"
     head = (ui.c("  " + ui.BRANCH + "  ", ui.GREY) + f"{verb} {ui.c(path, ui.BOLD)} with "
             + diff_summary(added, removed))
-    body = diff_lines(old, new, start=start, max_lines=max_lines)
+    body = diff_lines(old, new, start=start, max_lines=max_lines, ops=ops)
     return "\n".join([head] + ["     " + r for r in body])
 
 
@@ -267,11 +321,18 @@ def file_view_lines(lines: list[str], path: str) -> list[str]:
     keeping the line-number gutter grey."""
     from .highlight import lang_for_path
     lang = lang_for_path(path)
-    if not _colour_on() or lang is None:
+    if not _colour_on():
         return lines
     hl = Highlighter(lang)
     out = []
     for line in lines:
         m = _NUMBERED_VIEW.match(line)
-        out.append(ui.c(m.group(1), ui.GREY) + hl.line(m.group(2)) if m else line)
+        if not m:
+            out.append(line)
+        elif lang is None:
+            # Unknown extension: no language to highlight, but the view is
+            # still styled -- gutter and body both grey.
+            out.append(ui.c(m.group(1), ui.GREY) + ui.c(m.group(2), ui.GREY))
+        else:
+            out.append(ui.c(m.group(1), ui.GREY) + hl.line(m.group(2)))
     return out

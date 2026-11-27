@@ -3,6 +3,13 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.65.0
+- `scripts/publish.sh` runs a full-history secret scan (E4, `scripts/secret_scan.py`, every line ever added on any ref) before the origin push and refuses on a hit or when the scan cannot run; `--secret-scan` runs it alone. Hits print commit, path, rule and a fingerprint, never the value; reviewed false positives go in `scripts/secret_scan_allow.txt` by fingerprint (one entry: a placeholder PEM header in a voice test).
+- The todo plan renders as a checklist (U2): ☐ pending, bold ☐ in progress, ☒ struck through when completed, printed again only when the plan changes. Tool headers read like Claude Code's (`Read(path)`, `Bash(cmd)`, `Update Todos`), and a successful `read_file` shows `Read 120 lines` instead of the file's first lines.
+- Diff fast path (U8): lines are interned, the common head and tail trimmed, and a large changed middle uses autojunk or, past 20,000 lines, one replace. A 2,000-line rewrite of brace-heavy code took 48 s on 2.64.0 and now renders in about 5 ms (budget 10 ms). Verifier nits from 2.42.0: an unknown-extension `read_file` view renders grey, and a 4-backtick fence no longer closes on a 3-backtick line (from branch `wilbur/render-verifier-nits`).
+- Tests: `tests/test_secret_scan.py` (a secret deleted from HEAD or on a side branch still blocks, an allowed fingerprint does not allow another value, not-a-repo is UNKNOWN, publish refuses before the gate and the push), `tests/test_ui_todo_headers.py`, `tests/test_render_diff_fast_path.py`, `tests/test_render_verifier_nits.py`.
+
+
 ## 2.64.0
 - Tool-call parse errors fixed at the source (R1, `tool_call_mode`, default `auto`): when Ollama cannot parse the tool call the model wrote ("XML syntax error ... element <function> closed by </parameter>"), the same turn is asked again once in constrained mode: the `format` schema with the tool names, and no `tools` in the payload, so the server's XML tool-call parser never runs; Wilbur's own `parse_constrained_reply` reads the reply. If that also fails, the 2.62.0 note retry is the last resort. `tool_call_mode: "native"` keeps the 2.62.0 policy; any other value fails config validation. The `tool_parse_retry` event now carries `mode` (`constrained` or `note`). Not yet measured live: the rate on native vs constrained calls is owed to the M1 bench.
 - Bench rows carry `tool_parse_retries` (count of `tool_parse_retry` events); the B0 baseline (`docs/BENCH-B0-2026-11-26.md`) could not see retried parse errors without it.

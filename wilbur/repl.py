@@ -639,7 +639,9 @@ class Repl:
             args = data["args"]
             summary = (args.get("command") or args.get("pattern")
                        or args.get("path") or args.get("description") or "")
-            if not summary and args:
+            if data["name"] == "todo_write":
+                summary = ""    # U2: the checklist under it says the rest
+            elif not summary and args:
                 summary = json.dumps(args)[:60]
             print(ui.tool_call(data["name"], str(summary)[:70], data.get("recovered")))
         elif kind == "tool_end":
@@ -649,11 +651,21 @@ class Repl:
                 print(render.diff_view(diff["path"], diff["old"], diff["new"],
                                        start=diff.get("start", 1),
                                        created=diff.get("created", False)))
+            elif data.get("name") == "todo_write" and not data.get("error"):
+                # U2: the checklist is shown again only when the plan changed.
+                from .tools.todo import clean_todos
+                todos = clean_todos((data.get("args") or {}).get("todos"))
+                if todos != getattr(self, "_shown_todos", None):
+                    self._shown_todos = todos
+                    print(ui.todo_checklist(todos))
             else:
-                print(ui.tool_result(data.get("output", ""), data.get("error", False),
-                                      seconds=data.get("seconds"),
-                                      path=(data.get("args") or {}).get("path")
-                                      if data.get("name") == "read_file" else None))
+                summary = (ui.read_summary(data.get("output", ""), data.get("seconds"))
+                           if data.get("name") == "read_file" and not data.get("error")
+                           else None)
+                print(summary or ui.tool_result(data.get("output", ""), data.get("error", False),
+                                                seconds=data.get("seconds"),
+                                                path=(data.get("args") or {}).get("path")
+                                                if data.get("name") == "read_file" else None))
         elif kind == "model_phase":
             spinner = getattr(self, "_spinner", None)
             if spinner is not None:

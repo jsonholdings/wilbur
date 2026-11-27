@@ -14,6 +14,19 @@ STATES = ("pending", "in_progress", "completed")
 MARKS = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]"}
 
 
+def clean_todos(todos: Any) -> list[dict[str, str]]:
+    """The valid items of a todo_write `todos` argument, statuses normalised.
+    The REPL renders the checklist from the same cleaning the tool applies."""
+    cleaned = []
+    for item in todos if isinstance(todos, list) else []:
+        if not isinstance(item, dict) or "task" not in item:
+            continue
+        status = item.get("status", "pending")
+        cleaned.append({"task": str(item["task"]),
+                        "status": status if status in STATES else "pending"})
+    return cleaned
+
+
 class TodoWrite:
     name = "todo_write"
     read_only = True          # touches no user state, only the session's plan
@@ -44,14 +57,7 @@ class TodoWrite:
         self.todos: list[dict[str, str]] = []
 
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        todos = args.get("todos") or []
-        cleaned = []
-        for item in todos:
-            if not isinstance(item, dict) or "task" not in item:
-                continue
-            status = item.get("status", "pending")
-            cleaned.append({"task": str(item["task"]),
-                            "status": status if status in STATES else "pending"})
+        cleaned = clean_todos(args.get("todos"))
         if not cleaned:
             return ToolResult("No valid todos supplied.", is_error=True)
 
