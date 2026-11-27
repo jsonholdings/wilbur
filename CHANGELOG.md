@@ -3,6 +3,11 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.73.0
+- Defaults (R3b): `batch_hint_first_turn` and `todo_write_pair_hint` are now on by default. M2 (10 tasks x 4 plus the live pack, both hints on) scored 40/40 with live A/B/C passing; mean tool rounds 7.9 against 8.6 (M1) and 8.1 (B0), calls per round 1.27 against 1.11, and tool errors 5.7% against 6.8%. No regression was found, but the plan's rounds target (6.5 or fewer) is still missed, and the full 41 x 4 set has not yet been run. Write-up: `docs/BENCH-M2-2026-11-27.md`. Set either key to `false` to turn it off.
+- Tests: `tests/test_r3b_eventlog.py` asserts both defaults are on, with an explicit-off control for each; the transcript-count test in `tests/test_agent.py` turns the first-turn hint off.
+
+
 ## 2.72.0
 - Display (U3): a tool result cut at 6 lines now says `... +N lines (ctrl-o or /expand)`. ctrl-o or `/expand` prints the last cut result in full, including a `read_file` shown only as its `Read N lines` summary. The key prints above the prompt and keeps what is being typed.
 - Display (U5): a reply's reasoning shows as one dim line, `∴ Thinking... (N lines, ctrl-r or /thinking)`. ctrl-r or `/thinking` prints it whole, wrapped to the terminal width. With streaming on it goes through the live channel, so it waits while the prompt owns the terminal. ctrl-r no longer starts prompt_toolkit's reverse history search; up-arrow recall is unchanged.

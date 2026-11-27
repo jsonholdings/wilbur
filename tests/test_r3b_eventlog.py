@@ -2,7 +2,7 @@
 
 R3b (the bench-row counts are in test_bench_runner.py, not mirrored): a
 first-turn batching hint (`batch_hint_first_turn`) and a todo_write pairing
-hint (`todo_write_pair_hint`), both off by default until M2 measures them.
+hint (`todo_write_pair_hint`), both on by default since 2.73.0 (M2).
 E3a: wilbur.eventlog writes 0600 JSONL with the schema, rotates, and keeps no
 model text or secrets. E3b: the Agent tees its events into it (display
 unchanged) and the REPL's keep-going stop is logged with its reason.
@@ -40,8 +40,14 @@ def test_first_turn_hint_appended_once_after_first_user_turn(make_agent, tmp_pat
     assert a.messages[0]["role"] == "system"                # prefix untouched
 
 
-def test_first_turn_hint_off_by_default_control(make_agent):
+def test_first_turn_hint_on_by_default(make_agent):
     a, _ = make_agent([say("one")])
+    a.run("first")
+    assert sum(m.get("content") == BATCH_HINT for m in a.messages) == 1
+
+
+def test_first_turn_hint_off_control(make_agent):
+    a, _ = make_agent([say("one")], batch_hint_first_turn=False)
     a.run("first")
     assert not any(m.get("content") == BATCH_HINT for m in a.messages)
 
@@ -63,8 +69,15 @@ def test_todo_paired_with_action_gets_no_hint(make_agent, tmp_path):
     assert not any(TODO_PAIR_HINT in str(m.get("content")) for m in a.messages)
 
 
-def test_todo_hint_off_by_default_control(make_agent):
+def test_todo_hint_on_by_default(make_agent):
     a, _ = make_agent([_todo_round(), say("done")])
+    a.run("plan it")
+    tool_msgs = [m for m in a.messages if m.get("role") == "tool"]
+    assert tool_msgs and TODO_PAIR_HINT in tool_msgs[-1]["content"]
+
+
+def test_todo_hint_off_control(make_agent):
+    a, _ = make_agent([_todo_round(), say("done")], todo_write_pair_hint=False)
     a.run("plan it")
     assert not any(TODO_PAIR_HINT in str(m.get("content")) for m in a.messages)
 
