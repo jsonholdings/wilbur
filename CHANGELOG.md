@@ -3,6 +3,14 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.71.0
+- Correctness (E2, §18): a crash-recovery test kills a real `wilbur` REPL with SIGKILL while a `run_bash` tool call is running (fake backend, throwaway home). The documented recovery holds and no defect was found. run.json survives and reads `dead` (with `original_state: working`), `wilbur status --check` exits 1, the session saved mid-turn reloads with the interrupted call in it, `--resume` finishes a new turn and exits cleanly (run.json removed, the check back to 0), and the event log ends on whole JSON lines with the killed run's `tool_start` last and no `tool_end`, while the resumed run logs under a new run id.
+- Highlighting (U6): JS template literals across lines, JS regex literals (only where an operand is expected, so `a / b / c` stays division), YAML `|` and `>` block scalars, and C++ raw strings `R"delim(...)delim"`. Multi-line state uses one generic closer scheme.
+- Highlighting (U7): Go, Rust, Java, TOML, Dockerfile, HTML and CSS lexers in the existing colours, with fence aliases and file-extension mapping. With colour off the output still equals the input byte for byte.
+- Fix: the YAML key rule (since 2.42.0) and the new TOML key rule no longer backtrack on a long line with no `:` or `=`. Key words are now split by required blanks, so such a line fails in linear time; before, 16,000 blanks took 1.9 s in YAML, and 5,000 took 60 s with the first TOML rule.
+- Tests: `tests/test_e2_crash_recovery.py` (the SIGKILL case; controls: a clean exit leaves no run.json and the check passes, a torn last line fails the whole-line check, a dead-pid run.json fails `status --check`); `tests/test_highlight_u7.py` (every new construct and language, each with a token that must stay uncoloured, and colour-off identity).
+
+
 ## 2.70.0
 - Fewer rounds (R3b, measured in M2): the bench row records `batch_nudges`, `batch_hints` and `todo_pair_hints` per rep, so how often each note fired is no longer unknown. `batch_hint_first_turn` appends the batching note once, after the first user turn of a session and before round 1, as an appended message so the cached prompt prefix is kept. `todo_write_pair_hint` adds a note to the tool result of a reply whose only calls are `todo_write`, asking to send it together with the next action. Both switches are off by default until M2 measures them.
 - Observability (E3a): new `wilbur/eventlog.py`, a structured JSONL event log (`ts`, `run_id`, `session_id`, `event`, `round`, `data`) beside the sessions dir (`WILBUR_EVENT_LOG` overrides the path). The file is 0600 in a 0700 directory and rotates at `event_log_max_bytes` (5 MB, 3 kept). `data` keeps numbers and booleans; a string survives only under a safe label key (tool name, reason, phase...), redacted through `wilbur/redact.py`; reply text, reasoning, tool output and tool arguments are stored as lengths only. A torn last line from a killed process is skipped on read.

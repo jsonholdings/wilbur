@@ -38,12 +38,17 @@ _ALIASES = {
     "csharp": "csharp", "cs": "csharp", "c#": "csharp",
     "php": "php", "sql": "sql", "markdown": "markdown", "md": "markdown",
     "diff": "diff", "patch": "diff",
+    "go": "go", "golang": "go", "rs": "rust", "rust": "rust", "java": "java",
+    "toml": "toml", "dockerfile": "dockerfile", "docker": "dockerfile",
+    "html": "html", "htm": "html", "xml": "html", "css": "css",
 }
 _EXT = {
     ".py": "python", ".js": "js", ".mjs": "js", ".ts": "js", ".tsx": "js", ".jsx": "js",
     ".sh": "shell", ".bash": "shell", ".json": "json", ".yaml": "yaml", ".yml": "yaml",
     ".c": "c", ".h": "c", ".cpp": "c", ".hpp": "c", ".cc": "c", ".cs": "csharp",
     ".php": "php", ".sql": "sql", ".md": "markdown", ".diff": "diff", ".patch": "diff",
+    ".go": "go", ".rs": "rust", ".java": "java", ".toml": "toml", ".dockerfile": "dockerfile",
+    ".html": "html", ".htm": "html", ".css": "css",
 }
 
 
@@ -54,7 +59,10 @@ def normalize_lang(tag: str | None) -> str | None:
 
 
 def lang_for_path(path: str) -> str | None:
-    return _EXT.get(os.path.splitext(os.path.basename(path or ""))[1].lower())
+    base = os.path.basename(path or "")
+    if base == "Dockerfile" or base.startswith("Dockerfile.") or base == "Containerfile":
+        return "dockerfile"
+    return _EXT.get(os.path.splitext(base)[1].lower())
 
 
 def _words(ws) -> str:
@@ -101,6 +109,29 @@ _SQL_KW = ("select from where and or not insert into values update set delete cr
            "foreign references default unique begin commit rollback transaction with returning "
            "asc desc count sum avg min max").split()
 
+_GO_KW = ("break case chan const continue default defer else fallthrough for func go goto if "
+          "import interface map package range return select struct switch type var").split()
+_GO_BI = ("true false nil iota append cap close copy delete len make new panic print println "
+          "recover error string int int8 int16 int32 int64 uint uint8 uint16 uint32 uint64 uintptr "
+          "float32 float64 byte rune bool any complex64 complex128").split()
+_RS_KW = ("as async await break const continue crate dyn else enum extern false fn for if impl in "
+          "let loop match mod move mut pub ref return self Self static struct super trait true type "
+          "unsafe use where while").split()
+_RS_BI = ("Some None Ok Err Box Vec String Option Result i8 i16 i32 i64 i128 isize u8 u16 u32 u64 "
+          "u128 usize f32 f64 bool char str").split()
+_JAVA_KW = ("abstract assert boolean break byte case catch char class const continue default do "
+            "double else enum extends final finally float for goto if implements import instanceof "
+            "int interface long native new package private protected public return short static "
+            "strictfp super switch synchronized this throw throws transient try void volatile while "
+            "var record sealed permits yield true false null").split()
+_DOCKER_KW = ("FROM RUN CMD LABEL MAINTAINER EXPOSE ENV ADD COPY ENTRYPOINT VOLUME USER WORKDIR ARG "
+              "ONBUILD STOPSIGNAL HEALTHCHECK SHELL").split()
+# JS regex literal: only where an operand is expected (after an operator/opener or `return`),
+# so `a / b / c` stays division.
+_JS_RE_PREV = r"[(,=:\[!&|?{};]"
+_JS_REGEX = (r"(?:^\s*|(?<=" + _JS_RE_PREV + r")\s*|(?<=return\s))"
+             r"/(?![/*\s])(?:[^/\\\[\n]|\\.|\[(?:[^\]\\]|\\.)*\])+/[dgimsuyv]*")
+
 # (spec list, multi-line openers). Each spec: (group, pattern, colour).
 _SPECS: dict[str, list[tuple[str, str, str]]] = {
     "python": [
@@ -114,7 +145,9 @@ _SPECS: dict[str, list[tuple[str, str, str]]] = {
     "js": [
         ("bc", r"/\*", COMMENT),
         ("comment", r"//.*", COMMENT),
-        ("string", _DQ + "|" + _SQ + r"|`(?:[^`\\]|\\.)*`?", STRING),
+        ("tl", r"`", STRING),
+        ("regex", _JS_REGEX, STRING),
+        ("string", _DQ + "|" + _SQ, STRING),
         ("keyword", _words(_JS_KW), KEYWORD),
         ("builtin", _words(_JS_BI), BUILTIN),
         ("number", _NUM, NUMBER),
@@ -122,6 +155,7 @@ _SPECS: dict[str, list[tuple[str, str, str]]] = {
     "c": [
         ("bc", r"/\*", COMMENT),
         ("comment", r"//.*|^\s*#\s*\w+", COMMENT),
+        ("raw", r'(?:u8|[uUL])?R"[^()\\\s"]{0,16}\(', STRING),
         ("string", _DQ + "|" + _SQ, STRING),
         ("keyword", _words(_C_KW), KEYWORD),
         ("number", _NUM, NUMBER),
@@ -163,16 +197,78 @@ _SPECS: dict[str, list[tuple[str, str, str]]] = {
     ],
     "yaml": [
         ("comment", r"(?:^|(?<=\s))#.*", COMMENT),
-        ("key", r"^\s*(?:-\s+)?[\w.\-\"' ]+?(?=:(?:\s|$))", KEY),
+        ("blk", r"(?:(?<=:)|(?<=^-)|(?<=\s-))[ \t]+[|>][+-]?[1-9]?[+-]?[ \t]*(?:#.*)?$", STRING),
+        # Same linear shape as the TOML key (the lazy class with a space was
+        # quadratic on a long blank line: 16,000 blanks took 1.9 s).
+        ("key", r"^[ \t]*(?:-[ \t]+)?[\w.\-\"']+(?:[ \t]+[\w.\-\"']+)*(?=:(?:\s|$))", KEY),
         ("string", _DQ + "|" + _SQ, STRING),
         ("builtin", r"\b(?:true|false|null|yes|no|on|off)\b|^---$|^\.\.\.$", BUILTIN),
         ("number", r"(?<![\w.])-?\d+(?:\.\d+)?\b", NUMBER),
+    ],
+    "go": [
+        ("bc", r"/\*", COMMENT),
+        ("comment", r"//.*", COMMENT),
+        ("rawbt", r"`", STRING),
+        ("string", _DQ + "|" + _SQ, STRING),
+        ("keyword", _words(_GO_KW), KEYWORD),
+        ("builtin", _words(_GO_BI), BUILTIN),
+        ("number", _NUM, NUMBER),
+    ],
+    "rust": [
+        ("bc", r"/\*", COMMENT),
+        ("comment", r"//.*", COMMENT),
+        ("rsraw", r'\bb?r#*"', STRING),
+        ("string", r"b?" + _DQ + r"|b?'(?:[^'\\\n]|\\[^'\n]+)'", STRING),
+        ("keyword", _words(_RS_KW), KEYWORD),
+        ("builtin", _words(_RS_BI) + r"|\b\w+!", BUILTIN),
+        ("number", _NUM, NUMBER),
+    ],
+    "java": [
+        ("bc", r"/\*", COMMENT),
+        ("comment", r"//.*", COMMENT),
+        ("tq", r'"""', STRING),
+        ("string", _DQ + "|" + _SQ, STRING),
+        ("keyword", _words(_JAVA_KW), KEYWORD),
+        ("builtin", r"@\w+", BUILTIN),
+        ("number", _NUM, NUMBER),
+    ],
+    "toml": [
+        ("comment", r"#.*", COMMENT),
+        # A key is words split by mandatory blanks (no shared characters), so a long
+        # line with no "=" fails in linear time; a lazy class that also held the
+        # space backtracked cubically (5,000 blanks took 60 s, 2.71.0 verifier).
+        ("key", r"^[ \t]*\[\[?[^\]\n]*\]\]?|^[ \t]*[\w.\-\"']+(?:[ \t]+[\w.\-\"']+)*(?=[ \t]*=)", KEY),
+        ("tq", r'"""' + "|" + "'" * 3, STRING),
+        ("string", _DQ + "|'[^'\n]*'?", STRING),
+        ("builtin", r"\b(?:true|false)\b", BUILTIN),
+        ("number", r"(?<![\w.])[+-]?\d[\d_:.TZ+-]*\b", NUMBER),
+    ],
+    "dockerfile": [
+        ("comment", r"^\s*#.*", COMMENT),
+        ("keyword", r"(?i:^\s*(?:" + "|".join(_DOCKER_KW) + r")\b|(?<=\s)AS\b)", KEYWORD),
+        ("string", _DQ + "|" + _SQ, STRING),
+        ("builtin", r"\$\{?\w+\}?", BUILTIN),
+    ],
+    "html": [
+        ("hc", r"<!--", COMMENT),
+        ("keyword", r"</?[A-Za-z][\w:-]*|/?>|<!DOCTYPE\b", KEYWORD),
+        ("key", r"(?<=\s)[A-Za-z_:][\w:.-]*(?=\s*=)", KEY),
+        ("string", _DQ + "|" + _SQ, STRING),
+        ("builtin", r"&(?:#\d+|#x[0-9a-fA-F]+|\w+);", BUILTIN),
+    ],
+    "css": [
+        ("bc", r"/\*", COMMENT),
+        ("string", _DQ + "|" + _SQ, STRING),
+        ("keyword", r"@[\w-]+", KEYWORD),
+        ("key", r"(?:^|(?<=[{;]))\s*-{0,2}[A-Za-z][\w-]*(?=\s*:[^{]*(?:;|}|$))", KEY),
+        ("builtin", r"!important\b", BUILTIN),
+        ("number", r"#[0-9a-fA-F]{3,8}\b|(?<![\w-])-?\d+(?:\.\d+)?(?:px|em|rem|vh|vw|ms|s|deg|fr|%)?", NUMBER),
     ],
     "markdown": [
         ("code", r"`[^`]*`", CODE),
     ],
 }
-_BC_CLOSE = re.compile(r"\*/")
+_ML = ("bc", "tq", "tl", "raw", "hc", "rawbt", "rsraw", "blk")
 _COMPILED: dict[str, re.Pattern] = {}
 _COLOUR: dict[str, dict[str, str]] = {}
 
@@ -195,7 +291,9 @@ def _paint(text: str, code: str) -> str:
 class Highlighter:
     def __init__(self, lang: str | None):
         self.lang = normalize_lang(lang)
-        self._state: str | None = None   # "bc" or a python triple-quote delimiter
+        # Open multi-line construct: (closer, backslash-escapes?, colour), or
+        # ("", False, indent) for a YAML block scalar (ends at a line indented <= indent).
+        self._state: tuple | None = None
 
     def line(self, text: str) -> str:
         if ui._NO_COLOR or self.lang is None:
@@ -212,7 +310,7 @@ class Highlighter:
         return self._scan(text, emit=True)
 
     def _track_plain(self, text: str) -> None:
-        if self.lang in _SPECS and any(g in ("bc", "tq") for g, _, _ in _SPECS[self.lang]):
+        if self.lang in _SPECS and any(g in _ML for g, _, _ in _SPECS[self.lang]):
             self._scan(text, emit=False)
 
     @staticmethod
@@ -227,24 +325,39 @@ class Highlighter:
             return _paint(text, REMOVED)
         return text
 
+    @staticmethod
+    def _opener(g: str, tok: str, text: str) -> tuple:
+        if g == "bc":
+            return ("*/", False, COMMENT)
+        if g == "hc":
+            return ("-->", False, COMMENT)
+        if g == "tq":
+            return (tok[-3:], True, STRING)
+        if g == "tl":
+            return ("`", True, STRING)
+        if g == "rawbt":
+            return ("`", False, STRING)
+        if g == "raw":   # C++ R"delim( ... )delim"
+            return (")" + tok[tok.index('"') + 1:-1] + '"', False, STRING)
+        if g == "rsraw":  # Rust r#"..."#
+            return ('"' + "#" * tok.count("#"), False, STRING)
+        return ("", False, len(text) - len(text.lstrip()))   # YAML block scalar
+
     def _close(self, text: str, pos: int) -> int:
         """Return the end index of the open multi-line construct, or -1."""
-        if self._state == "bc":
-            m = _BC_CLOSE.search(text, pos)
-            return m.end() if m else -1
-        delim = self._state
+        closer, escapes, _ = self._state
         i = pos
         while True:
-            j = text.find(delim, i)
+            j = text.find(closer, i)
             if j < 0:
                 return -1
             k = j - 1
             bs = 0
-            while k >= pos and text[k] == "\\":
+            while escapes and k >= pos and text[k] == "\\":
                 bs += 1
                 k -= 1
             if bs % 2 == 0:
-                return j + 3
+                return j + len(closer)
             i = j + 1
 
     def _scan(self, text: str, emit: bool) -> str:
@@ -253,9 +366,14 @@ class Highlighter:
         out: list[str] = []
         pos = 0
         n = len(text)
+        if self._state and self._state[0] == "":
+            indent = len(text) - len(text.lstrip())
+            if not text.strip() or indent > self._state[2]:
+                return _paint(text, STRING) if emit else ""
+            self._state = None
         while pos <= n:
             if self._state:
-                col = COMMENT if self._state == "bc" else STRING
+                col = self._state[2]
                 end = self._close(text, pos)
                 if end < 0:
                     if emit:
@@ -271,12 +389,17 @@ class Highlighter:
                 g = m.lastgroup
                 if emit:
                     out.append(text[pos:m.start()])
-                if g in ("bc", "tq"):
-                    self._state = "bc" if g == "bc" else m.group()[-3:]
+                if g in _ML:
+                    self._state = self._opener(g, m.group(), text)
+                    end = self._close(text, m.end()) if g != "blk" else -1
+                    if end >= 0:   # closes on the same line: paint it as one token
+                        self._state = None
+                    else:
+                        end = m.end()
                     if emit:
-                        out.append(_paint(m.group(), colours[g]))
-                    pos = m.end()
-                    restart = True
+                        out.append(_paint(text[m.start():end], colours[g]))
+                    pos = end
+                    restart = g != "blk"
                     break
                 if emit:
                     out.append(_paint(m.group(), colours[g]))
