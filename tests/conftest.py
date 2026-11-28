@@ -42,6 +42,8 @@ os.environ["WILBUR_USER_SKILLS_DIR"] = str(_TEST_WILBUR_HOME / "skills")
 # are real files on the owner machine; the suite must never read or write them.
 os.environ["WILBUR_GLOBAL_INSTRUCTIONS"] = str(_TEST_WILBUR_HOME / "global-WILBUR.md")
 os.environ["WILBUR_LAST_PROJECT"] = str(_TEST_WILBUR_HOME / "state" / "last-project")
+# 2.74.0: per-project memory lives under ~/.local/share/wilbur/memory on the owner machine.
+os.environ["WILBUR_MEMORY_DIR"] = str(_TEST_WILBUR_HOME / "memory")
 # Per-process GPU holder marks: a live Wilbur on this machine must not make release() think
 # another holder is alive, and tests must never add or prune marks in the real dir.
 os.environ["WILBUR_GPU_HOLDERS_DIR"] = str(_TEST_WILBUR_HOME / "gpu-holders")

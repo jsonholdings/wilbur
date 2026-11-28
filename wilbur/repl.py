@@ -28,6 +28,7 @@ from .inbox import Inbox, poll_interval
 from .config import Config, HISTORY_PATH
 from . import persona as persona_mod
 from . import projectdir
+from . import memory as memory_mod
 from . import registry
 from .models import ModelManager, fit_report, gpu_free_mb, gpu_free_mb_for
 from .tools.base import OUTSIDE_CWD, Approval
@@ -70,6 +71,7 @@ HELP = """  Model
   /clear            start a fresh conversation
   /cost             tokens and timing for this session
   /cd <dir>         move the session to another project directory (reloads its WILBUR.md)
+  /memory [show|forget <name>]  this project's remembered facts and last session summary
   /queue            show commands typed and queued during the current turn
   /queue clear      drop everything queued, without cancelling the live turn
   /agents           list in-flight and recent subagents (role, status, elapsed)
@@ -84,7 +86,7 @@ HELP = """  Model
 
 _SLASH_COMMANDS = (
     "/model", "/search", "/pull", "/context", "/turns", "/continue", "/retry", "/compact", "/tools",
-    "/approve", "/team", "/loop", "/keepgoing", "/clear", "/cost", "/cd", "/queue", "/queue clear", "/agents",
+    "/approve", "/team", "/loop", "/keepgoing", "/clear", "/cost", "/cd", "/memory", "/queue", "/queue clear", "/agents",
     "/expand", "/thinking", "/help", "/restart", "/exit",
 )
 
@@ -192,6 +194,8 @@ class Repl:
             print(ui.success(f"resumed {self.session_id} ({len(saved)} messages{plan})"))
             if self.state.objective:
                 print(ui.notice(f"objective: {self.state.objective.strip()[:120]}"))
+        elif getattr(self, "_start_brief", ""):
+            print(ui.notice(self._start_brief))
 
     # ---------------------------------------------------------------- #
 
@@ -250,10 +254,66 @@ class Repl:
         """
         blocks = [persona_mod.system_extra(getattr(self.config, "persona", "wilbur")),
                   projectdir.global_instructions()]
+        blocks.append(self._memory_block())
         project = self._project_instructions()
         if project:
             blocks.append(project)
         return "\n\n".join(b for b in blocks if b)
+
+    def _memory_on(self) -> bool:
+        return bool(getattr(self.config, "auto_memory", True))
+
+    def _memory_block(self) -> str:
+        """Recalled project memory + the start brief, computed once per agent
+        so it sits in the static prefix (a memory_save mid-session loads next
+        session, never rewriting the prompt the cache was built on)."""
+        if not self._memory_on():
+            return ""
+        try:
+            block = memory_mod.load_block(self.cwd)
+            brief = memory_mod.start_brief(self.cwd)
+        except Exception:  # noqa: BLE001 -- a bad memory file never blocks the agent
+            return ""
+        self._start_brief = brief
+        if brief:
+            block += "\n\n" + brief
+        return block
+
+    def _save_memory_summary(self) -> None:
+        """Write this session's summary (exit, /clear, compaction). Never raises."""
+        if not self._memory_on() or not getattr(self, "agent", None):
+            return
+        try:
+            memory_mod.write_session_summary(self.cwd, self.session_id,
+                                             self.agent.messages, self.state)
+        except Exception:  # noqa: BLE001 -- a summary must never break exit
+            pass
+
+    def _memory_command(self, arg: str) -> None:
+        sub, _, name = arg.partition(" ")
+        name = name.strip()
+        if sub == "show" and name:
+            text = memory_mod.read_fact(self.cwd, name)
+            print(text if text is not None else ui.error(f"no memory named {name!r}"))
+            return
+        if sub == "forget" and name:
+            ok = memory_mod.forget(self.cwd, name)
+            print(ui.success(f"forgot {name}") if ok else ui.error(f"no memory named exactly {name!r}"))
+            return
+        if sub:
+            print(ui.error("usage: /memory [show <name> | forget <name>]"))
+            return
+        pdir = memory_mod.project_dir(self.cwd)
+        state = "on" if self._memory_on() else "off (auto_memory false)"
+        print(ui.notice(f"project memory: {pdir or 'none ($HOME is not a project)'} -- auto_memory {state}"))
+        facts = memory_mod.list_facts(self.cwd)
+        for fact in facts:
+            print(f"  {fact['name']} ({fact['type']}): {fact['description']}")
+        if not facts:
+            print("  (no facts saved)")
+        newest = memory_mod.newest_session(self.cwd)
+        if newest is not None:
+            print(ui.notice(f"last session summary: {newest[0].get('date', '?')}"))
 
     def _project_instructions(self) -> str:
         """Load CLAUDE.md / WILBUR.md from the project, like Claude Code does."""
@@ -817,6 +877,7 @@ class Repl:
                 f"reply hit the output cap ({data.get('cap', 0):,} tokens, num_predict) "
                 "and was cut off" + ("; asking for smaller steps" if data.get("nudged") else "")))
         elif kind == "compact":
+            self._save_memory_summary()
             print(ui.notice(
                 f"compacted context: {data['before_tokens']:,} -> "
                 f"{data['after_tokens']:,} tokens"))
@@ -950,6 +1011,10 @@ class Repl:
                 sys.stdout.flush()
             agents_registry.bind_persist(None)
             self._stop_inbox_watch()
+            # getattr: test doubles drive run() with a bare stand-in self
+            save_summary = getattr(self, "_save_memory_summary", None)
+            if save_summary is not None:
+                save_summary()
             runstate.remove(self.session_id)  # clean exit: no stale run.json
 
     def restart_argv(self) -> list[str]:
@@ -1430,6 +1495,8 @@ class Repl:
             self._model_command(arg)
         elif cmd == "/cd":
             self._cd_command(arg)
+        elif cmd == "/memory":
+            self._memory_command(arg)
         elif cmd == "/search":
             self._search(arg)
         elif cmd == "/pull":
@@ -1474,6 +1541,7 @@ class Repl:
         elif cmd == "/compact":
             self._compact_command()
         elif cmd == "/clear":
+            self._save_memory_summary()
             from .state import RunState
             self.state = RunState()
             self.session_id = self.sessions.new_id(self.cwd)
@@ -1502,6 +1570,7 @@ class Repl:
         if not target.is_dir():
             print(ui.error(f"/cd: {target} is not a directory"))
             return
+        self._save_memory_summary()  # the old project's summary, before switching
         self.cwd = str(target)
         from . import render
         render.link_root = self.cwd  # U4: path:line links resolve in the new root

@@ -266,6 +266,9 @@ class Config:
     # beside the sessions dir; scalars and safe labels only, no model text.
     event_log: bool = True
     event_log_max_bytes: int = 5 * 1024 * 1024
+    # 2.74.0: per-project memory (wilbur.memory): load the index + newest
+    # session summary at start, memory_* tools, a summary on exit/clear/compact.
+    auto_memory: bool = True
 
     # --- terminal UX (lane B, programmes push 2026-11-28) ---
     # U1: show the reply as it streams (complete lines, rendered), on a tty

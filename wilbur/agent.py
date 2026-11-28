@@ -194,6 +194,11 @@ class Agent:
         if getattr(config, "image_generation", False):
             from .tools.image import GenerateImage
             registry["generate_image"] = GenerateImage()
+        if getattr(config, "auto_memory", True):
+            # 2.74.0: per-project memory (wilbur.memory), outside the repo.
+            from .tools.memory_tools import MemoryForget, MemoryRead, MemorySave
+            for tool in (MemorySave(), MemoryRead(), MemoryForget()):
+                registry[tool.name] = tool
         if tool_names is not None:
             registry = {k: v for k, v in registry.items() if k in tool_names}
         self.registry = registry

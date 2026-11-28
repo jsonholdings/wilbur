@@ -3,6 +3,15 @@
 Earlier history lives in `git log`; this file starts at 2.4.0.
 
 
+## 2.74.0
+- Memory (auto-project-memory): Wilbur now remembers each project between sessions. The store is `~/.local/share/wilbur/memory/<name>-<hash>/` (0700, files 0600; `WILBUR_MEMORY_DIR` overrides), outside the repo, so it is never committed or mirrored. It holds a `MEMORY.md` index, one file per fact (`user`, `feedback`, `project`, `reference`), and `sessions/<date>-<id>.md` summaries (the newest 10 are kept). Every write passes through `redact.py`.
+- At session start the index, the newest session summary and a start brief ("Resuming <project>: last session <date>, open items: ...", plus the commits made since that session's HEAD) go into the system prompt once, labelled as recalled and possibly stale. The block is capped at 4,000 characters, and over the cap it points at `memory_read`. It is built once per agent, so a mid-session save never changes the prompt prefix and prompt checkpoints survive.
+- Tools: `memory_save` (the same name updates in place; the same body under another name is refused as a duplicate), `memory_read` (one fact, or the list), `memory_forget` (exact name only).
+- A session summary (goal, files changed, commit and test commands, verified, open items, next step) is written on exit, `/clear` and compaction. It is built from the transcript and plan, with no model call.
+- `/memory` lists the facts and the last summary; `/memory show <name>` and `/memory forget <name>` act on one. The `auto_memory` setting (default `true`) turns the whole feature off: nothing is loaded or written, and the tools are not offered.
+- Tests: `tests/test_auto_memory.py` covers a fresh project loading nothing, a second session loading the first one's summary and the commits since, redaction (with a control), in-place updates and duplicates, the size cap (with a control), pruning, a byte-stable prompt prefix across turns and a save, the tools, `/memory`, `/clear`, and the `auto_memory` off control. The suite points `WILBUR_MEMORY_DIR` at a temp dir.
+
+
 ## 2.73.0
 - Defaults (R3b): `batch_hint_first_turn` and `todo_write_pair_hint` are now on by default. M2 (10 tasks x 4 plus the live pack, both hints on) scored 40/40 with live A/B/C passing; mean tool rounds 7.9 against 8.6 (M1) and 8.1 (B0), calls per round 1.27 against 1.11, and tool errors 5.7% against 6.8%. No regression was found, but the plan's rounds target (6.5 or fewer) is still missed, and the full 41 x 4 set has not yet been run. Write-up: `docs/BENCH-M2-2026-11-27.md`. Set either key to `false` to turn it off.
 - Tests: `tests/test_r3b_eventlog.py` asserts both defaults are on, with an explicit-off control for each; the transcript-count test in `tests/test_agent.py` turns the first-turn hint off.
