@@ -80,6 +80,22 @@ class Config:
     max_tool_output_chars: int = 24000
     max_tool_output_lines: int = 800
     max_read_lines: int = 1500
+    # --- diagnostics on edit (wilbur/tools/diagnostics.py) ---
+    # After write_file/edit_file the matching fast checker (python compile,
+    # ruff, pyright, shellcheck, clang-tidy or cc -fsyntax-only, gdlint) runs
+    # on the touched file and its findings are appended to the result. False
+    # = the pre-diagnostics result, byte for byte. A missing checker is named
+    # as skipped. `diagnostics_commands` maps a checker name to an argv
+    # prefix (e.g. a `tb` wrapper); `diagnostics_disabled` lists names to skip.
+    diagnostics_on_edit: bool = True
+    # tool-multi-patch: offer apply_patch (multi-file unified diff or edit
+    # list, all or nothing). False = the tool is not in the registry.
+    apply_patch_tool: bool = True
+    diagnostics_timeout_s: float = 10.0
+    diagnostics_max_lines: int = 40
+    diagnostics_max_chars: int = 4000
+    diagnostics_commands: dict[str, list[str]] = field(default_factory=dict)
+    diagnostics_disabled: list[str] = field(default_factory=list)
     # Hard memory cap for every run_bash / run_tests command (systemd scope
     # MemoryMax, swap 0). A model-written infinite allocation hung pop-os
     # on 2026-11-23; see wilbur/tools/contained.py.
@@ -301,7 +317,8 @@ class Config:
     _INT_MINIMUMS = (("tool_failure_block_at", 1), ("tool_failure_stop_at", 1),
                      ("stuck_limit", 1), ("auto_continue_max", 0),
                      ("empty_reply_retries", 0), ("runaway_content_chars", 0),
-                     ("batch_nudge_after", 0))
+                     ("batch_nudge_after", 0), ("diagnostics_max_lines", 1),
+                     ("diagnostics_max_chars", 200))
 
     def validate(self) -> None:
         """Fail fast on a config value no use-site can work with; clamp an

@@ -17,12 +17,16 @@ from .test_runner import RunTests
 from .todo import TodoWrite
 
 
-def build_registry(include_task: bool = True) -> dict[str, Any]:
+def build_registry(include_task: bool = True, config: Any = None) -> dict[str, Any]:
     tools: list[Any] = [
         Bash(), ReadFile(), WriteFile(), EditFile(),
         Glob(), Grep(), ListFiles(), TodoWrite(),
         RunTests(), ListSkills(), LoadSkill(),
     ]
+    # tool-multi-patch: offered only while the switch is on (default on).
+    if getattr(config, "apply_patch_tool", True):
+        from .patch import ApplyPatch
+        tools.insert(4, ApplyPatch())
     if include_task:
         from .task import Task
         tools.append(Task())

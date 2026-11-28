@@ -10,7 +10,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable
 
 from .config import Config
-from .context import CHARS_PER_TOKEN, estimate_tokens, compact
+from .context import CHARS_PER_TOKEN, WRITE_TOOLS, compact, estimate_tokens, written_paths
 from . import directives, projectdir
 from .directives import tool_rules_for
 from .fake_backend import make_client
@@ -21,9 +21,9 @@ from .tools import ToolContext, build_registry, to_schema
 from .tools.base import Approval, ToolResult
 from .tools.hints import env_facts
 
-# Tools whose success changes files on disk, and therefore the moment at
-# which the project's own check is worth running.
-WRITE_TOOLS = {"write_file", "edit_file"}
+# WRITE_TOOLS (from context): tools whose success changes files on disk, and
+# therefore the moment at which the project's own check is worth running.
+# apply_patch (2.75.0) names several paths; context.written_paths lists them.
 
 # 2.59.0: tools safe to run concurrently when one reply holds several of them.
 # They never prompt for approval and only add keys to ctx.read_files; anything
@@ -190,7 +190,7 @@ class Agent:
         # wilbur.agent.OllamaClient still takes effect; `backend: fake` in the
         # config selects the scripted client instead (wilbur.fake_backend).
         self.client = make_client(config, model or config.model, ollama_cls=OllamaClient)
-        registry = build_registry(include_task=include_task)
+        registry = build_registry(include_task=include_task, config=config)
         if getattr(config, "image_generation", False):
             from .tools.image import GenerateImage
             registry["generate_image"] = GenerateImage()
@@ -897,9 +897,9 @@ class Agent:
         if call.name in WRITE_TOOLS:
             self.state.writes += 1
             from .doneclaim import is_code_path
-            written = str((call.arguments or {}).get("path", ""))
-            if is_code_path(written) and written not in getattr(self, "untested_code_writes", []):
-                self.untested_code_writes = getattr(self, "untested_code_writes", []) + [written]
+            for written in written_paths(call.name, call.arguments or {}):
+                if is_code_path(written) and written not in getattr(self, "untested_code_writes", []):
+                    self.untested_code_writes = getattr(self, "untested_code_writes", []) + [written]
 
         # REPEAT-SUCCESS (2.44.2): the failure ledger only counts FAILED repeats,
         # so a model reissuing the identical successful call with the identical
@@ -964,6 +964,11 @@ class Agent:
                                       sort_keys=True, default=str)
                     sig += f"#{hashlib.sha1(body.encode()).hexdigest()[:10]}"
                 return sig
+        if call.name in WRITE_TOOLS:
+            # 2.75.0: apply_patch has no single path key; without the hash every
+            # patch call would share one signature and trip the repeat breaker.
+            body = json.dumps(args, sort_keys=True, default=str)
+            return f"{call.name}#{hashlib.sha1(body.encode()).hexdigest()[:10]}"
         return ",".join(sorted(args))[:80]
 
     def _estimate_prompt(self) -> int:

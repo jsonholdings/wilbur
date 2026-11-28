@@ -117,7 +117,7 @@ def _shorten(text: str, limit: int) -> str:
 
 # U2 (2.65.0): Claude-Code-style headers, `Read(path)` rather than `read_file(path)`.
 # A tool without a label (MCP, a plugin) keeps its own name.
-TOOL_LABELS = {"read_file": "Read", "write_file": "Write", "edit_file": "Update",
+TOOL_LABELS = {"read_file": "Read", "write_file": "Write", "edit_file": "Update", "apply_patch": "Patch",
                "list_files": "List", "glob": "Glob", "grep": "Search", "run_bash": "Bash",
                "run_tests": "Test", "todo_write": "Update Todos", "task": "Task",
                "generate_image": "Image", "list_skills": "Skills", "load_skill": "Skill"}

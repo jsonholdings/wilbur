@@ -44,6 +44,10 @@ def denial_message(what: str, outcome: "Approval") -> str:
 # integrity.py into the Wilbur repo root, outside its task directory.
 OUTSIDE_CWD = "OUTSIDE the working directory: "
 
+# Tools that write files and so fall under auto-edit / auto_approve rules.
+# apply_patch refuses outside-cwd paths itself, so it never carries OUTSIDE_CWD.
+EDIT_TOOLS = frozenset({"edit_file", "write_file", "apply_patch"})
+
 
 def outside_cwd(path: Path, cwd: str) -> bool:
     """True when `path` is not under `cwd` (both resolved, symlinks followed)."""

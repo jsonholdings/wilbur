@@ -29,7 +29,31 @@ CHARS_PER_TOKEN = 3.5
 # context cannot itself trigger the next compaction.
 UNACTED_KEEP_SHARE = 0.50
 READ_TOOL = "read_file"
-WRITE_TOOLS = frozenset({"edit_file", "write_file"})
+WRITE_TOOLS = frozenset({"edit_file", "write_file", "apply_patch"})
+
+
+def written_paths(name: str, args: dict[str, Any]) -> list[str]:
+    """Every path a write tool call names. write_file/edit_file carry one
+    `path`; apply_patch (2.75.0) names several, in its `edits` list or in the
+    file headers of its unified `patch`. A diff that does not parse names
+    nothing (the tool refuses it too)."""
+    if name not in WRITE_TOOLS or not isinstance(args, dict):
+        return []
+    if name != "apply_patch":
+        path = args.get("path")
+        return [str(path)] if path else []
+    paths: list[str] = []
+    edits = args.get("edits")
+    if isinstance(edits, list):
+        paths = [str(e["path"]) for e in edits if isinstance(e, dict) and e.get("path")]
+    patch = args.get("patch")
+    if isinstance(patch, str) and patch:
+        from .tools.patch import PatchError, parse_unified_diff
+        try:
+            paths += [fp.path for fp in parse_unified_diff(patch)]
+        except PatchError:
+            pass
+    return list(dict.fromkeys(paths))
 _NUMBERED_LINE = re.compile(r"^\s*\d+\t", re.M)
 
 COMPACT_INSTRUCTION = """Summarise the conversation so far for your own use as \
@@ -179,8 +203,8 @@ def _carry_unacted_reads(body, to_summarise, keep_recent, config):
         if msg.get("role") == "assistant":
             for call in msg.get("tool_calls") or []:
                 name, args = _call_args(call)
-                if name in WRITE_TOOLS:
-                    written_after.add(_norm_path(args.get("path")))
+                for written in written_paths(name, args):
+                    written_after.add(_norm_path(written))
             continue
         pair = pairs.get(id(msg))
         if msg.get("role") != "tool" or not pair or pair[0] != READ_TOOL:

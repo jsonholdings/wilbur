@@ -31,7 +31,7 @@ from . import projectdir
 from . import memory as memory_mod
 from . import registry
 from .models import ModelManager, fit_report, gpu_free_mb, gpu_free_mb_for
-from .tools.base import OUTSIDE_CWD, Approval
+from .tools.base import EDIT_TOOLS, OUTSIDE_CWD, Approval
 
 # Private build only: the public mirror ships without gpu_priority.py (see
 # scripts/sync_to_mirror.py), and then Wilbur behaves exactly as it always has.
@@ -645,11 +645,11 @@ class Repl:
         # auto-edit and auto_approve cover edits inside the working directory
         # only (tools/base.py OUTSIDE_CWD); one outside it is asked about.
         inside = not detail.startswith(OUTSIDE_CWD)
-        if (self.approve_mode == "auto-edit" and tool in {"edit_file", "write_file"}
+        if (self.approve_mode == "auto-edit" and tool in EDIT_TOOLS
                 and inside):
             return Approval.GRANTED
         if tool in self.config.auto_approve and (
-                inside or tool not in {"edit_file", "write_file"}):
+                inside or tool not in EDIT_TOOLS):
             return Approval.GRANTED
 
         # Every approval routes through this one prompt, whether it came from
