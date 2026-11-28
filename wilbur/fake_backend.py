@@ -36,7 +36,7 @@ from typing import Any, Iterable
 
 from .llm import OllamaClient, Reply, ServerActivity, ToolCall, recover_tool_calls
 
-BACKENDS = ("ollama", "fake")
+BACKENDS = ("ollama", "fake", "openai")
 DEFAULT_EXHAUSTED = "done"
 
 
@@ -181,7 +181,12 @@ def make_client(config: Any, model: str, ollama_cls: Any = OllamaClient) -> Any:
     caller so tests that patch `wilbur.agent.OllamaClient` keep working."""
     if check_backend(config) == "fake":
         return shared_client(config.fake_script)
-    client = ollama_cls(config.base_url, model, config.request_timeout)
+    if check_backend(config) == "openai":
+        from .backend_openai import OpenAIClient, read_api_key
+        bearer = read_api_key(getattr(config, "openai_api_key_file", ""))
+        client = OpenAIClient(config.base_url, model, config.request_timeout, api_key=bearer)
+    else:
+        client = ollama_cls(config.base_url, model, config.request_timeout)
     if getattr(config, "constrained_tool_calls", False):
         client.constrained_tool_calls = True
     keep_alive = getattr(config, "ollama_keep_alive", "")

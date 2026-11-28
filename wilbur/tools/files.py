@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import diagnostics, hints
+from . import diagnostics, edit_match, hints
 from .base import (OUTSIDE_CWD, Approval, ToolContext, ToolResult, clamp, denial_message,
                    outside_cwd)
 
@@ -151,9 +151,10 @@ class EditFile:
     name = "edit_file"
     read_only = False
     description = (
-        "Replace an exact string in a file. old_string must match the file "
-        "exactly, including indentation, and must be unique unless replace_all "
-        "is true. Read the file first."
+        "Replace a string in a file. Copy old_string exactly from the file and "
+        "make it unique unless replace_all is true; if no exact match exists, a "
+        "unique match that differs only in whitespace or indentation is used. "
+        "Read the file first."
     )
     schema = {
         "type": "object",
@@ -184,39 +185,77 @@ class EditFile:
         if old == new:
             return ToolResult("old_string and new_string are identical.", is_error=True)
 
-        text = path.read_text(errors="replace")
+        # newline="" keeps CRLF as written: read_text() would fold it to LF
+        # and the write below would silently convert the whole file.
+        with open(path, newline="", errors="replace") as fh:
+            text = fh.read()
+        newline = "\r\n" if "\r\n" in text else "\n"
         count = text.count(old)
+        if count == 0 and newline == "\r\n" and "\n" in old and "\r\n" not in old:
+            # The model sent LF for a CRLF file: retry the exact match in CRLF.
+            crlf_old = old.replace("\n", "\r\n")
+            if text.count(crlf_old):
+                old, count = crlf_old, text.count(crlf_old)
+                new = new.replace("\r\n", "\n").replace("\n", "\r\n")
 
+        tolerant_line = 0
         if count == 0:
-            hint = _near_miss_hint(text, old)
-            return ToolResult(
-                f"old_string not found in {path}.{hint}", is_error=True)
-        if count > 1 and not args.get("replace_all"):
+            spans = edit_match.find_tolerant(text, old)
+            if len(spans) > 1:
+                return ToolResult(f"old_string not found exactly in {path}. "
+                                  + edit_match.ambiguous_reply(text, spans), is_error=True)
+            if not spans:
+                hint = _near_miss_hint(text, old)
+                closest = edit_match.closest_reply(text, old)
+                return ToolResult(
+                    f"old_string not found in {path}.{hint}"
+                    + (f"\n{closest}" if closest else ""), is_error=True)
+            span = spans[0]
+            matched = text[span.start:span.end].splitlines()
+            replacement = edit_match.reindent(new, old, matched, newline)
+            if replacement is None:
+                return ToolResult(
+                    f"old_string not found exactly in {path}.{_near_miss_hint(text, old)} "
+                    "The lines match only with their nesting flattened, so the new text "
+                    f"cannot be re-indented safely (lines {span.start_line + 1}-"
+                    f"{span.start_line + span.line_count}).", is_error=True)
+            at, end = span.start, span.end
+            if not replacement and text.startswith(newline, end):
+                end += len(newline)  # deleting whole lines: take their line break too
+            tolerant_line = span.start_line + 1
+            count = 1
+        elif count > 1 and not args.get("replace_all"):
             return ToolResult(
                 f"old_string appears {count} times in {path}. Add more surrounding "
                 "context to make it unique, or pass replace_all.",
                 is_error=True,
             )
+        else:
+            at, end, replacement = text.find(old), text.find(old) + len(old), new
         where = OUTSIDE_CWD if outside_cwd(path, ctx.cwd) else ""
         outcome = ctx.approve("edit_file", f"{where}edit {path}")
         if outcome is not Approval.GRANTED:
             return ToolResult(denial_message("edit", outcome), is_error=True)
 
-        updated = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
-        path.write_text(updated)
+        replace_all = bool(args.get("replace_all")) and not tolerant_line
+        updated = (text.replace(old, new) if replace_all
+                   else text[:at] + replacement + text[end:])
+        with open(path, "w", newline="") as fh:
+            fh.write(updated)
         ctx.read_files[str(path)] = path.stat().st_mtime
         # The diff shown to the user: the first replacement, with its real
         # line numbers and a little surrounding file for context.
-        at = text.find(old)
         line_start = text.rfind("\n", 0, at) + 1
-        line_end = text.find("\n", at + len(old))
+        line_end = text.find("\n", end)
         line_end = len(text) if line_end == -1 else line_end
         before_region = text[line_start:line_end]
-        after_region = before_region.replace(old, new, 1)
-        message = diagnostics.annotate(
-            f"Edited {path} ({count if args.get('replace_all') else 1} "
-            f"replacement{'s' if args.get('replace_all') and count > 1 else ''}).",
-            [path], str(ctx.cwd), ctx.config)
+        after_region = text[line_start:at] + replacement + text[end:line_end]
+        summary = (f"Edited {path} ({count if replace_all else 1} "
+                   f"replacement{'s' if replace_all and count > 1 else ''}).")
+        if tolerant_line:
+            summary += (f" No exact match; used the unique whitespace-tolerant match at "
+                        f"line {tolerant_line}, re-indented to the file's indentation.")
+        message = diagnostics.annotate(summary, [path], str(ctx.cwd), ctx.config)
         return ToolResult(message,
                           diff={"path": args["path"], "old": before_region,
                                 "new": after_region,

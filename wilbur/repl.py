@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover -- non-POSIX platform
 from . import team as team_mod
 from . import ui
 from . import runstate
+from . import safety
 from .agent import Agent
 from .llm import ModelNotResponding
 from .inbox import Inbox, poll_interval
@@ -639,18 +640,24 @@ class Repl:
 
     # ---------------------------------------------------------------- #
 
+    # wilbur.safety: this approver can put a SAFETY CHECK to a human.
+    honours_safety_ask = True
+
     def _approve(self, tool: str, detail: str) -> Approval:
         # A push to a default branch (tools/gitguard.py) is always asked:
         # neither approve-all nor an auto_approve entry covers it, and an
         # "a" answer grants this push only (2.76.0, rule git_push_default).
-        always_ask = tool == "git_push_default"
+        # A SAFETY CHECK (untrusted-origin arguments or an outbound action not
+        # in outbound_allow) always asks too, whatever the approve mode.
+        safety_check = detail.startswith(safety.ASK_MARK)
+        always_ask = tool == "git_push_default" or safety_check
         if self.approve_mode == "all" and not always_ask:
             return Approval.GRANTED
         # auto-edit and auto_approve cover edits inside the working directory
         # only (tools/base.py OUTSIDE_CWD); one outside it is asked about.
         inside = not detail.startswith(OUTSIDE_CWD)
         if (self.approve_mode == "auto-edit" and tool in EDIT_TOOLS
-                and inside):
+                and inside and not always_ask):
             return Approval.GRANTED
         if not always_ask and tool in self.config.auto_approve and (
                 inside or tool not in EDIT_TOOLS):
@@ -700,7 +707,7 @@ class Repl:
                 return Approval.UNAVAILABLE
             answer = answer_line.strip().lower()
             if answer == "a":
-                if not always_ask:
+                if not always_ask:  # "always" never widens past a push or safety check
                     self.approve_mode = "all"
                 return Approval.GRANTED
             if answer in {"y", "yes"}:

@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from .config import Config
 from .context import CHARS_PER_TOKEN, WRITE_TOOLS, compact, estimate_tokens, written_paths
-from . import directives, projectdir
+from . import directives, projectdir, safety
 from .directives import tool_rules_for
 from .fake_backend import make_client
 from .llm import OllamaClient, ToolCall
@@ -223,7 +223,10 @@ class Agent:
         self._estimate_at_last_prompt = 0
         self.known = set(registry)
         self.state = state if state is not None else RunState()
-        self.ctx = ToolContext(cwd=cwd, config=config, read_files={}, approve=approve)
+        # prompt-injection-guard / outbound-action-policy (wilbur.safety)
+        self.guard = safety.Guard(config, cwd)
+        self.ctx = ToolContext(cwd=cwd, config=config, read_files={},
+                               approve=self.guard.wrap_approve(approve))
         self.ctx.state = self.state
         self.ctx.cancel = self.cancel_event
         # wilbur.inbox.Inbox (set by the REPL): a message typed mid-turn is
@@ -494,6 +497,7 @@ class Agent:
                 if index not in prefetched:
                     prefetched.update(self._prefetch_reads(calls, index))
                 result = self._execute(call, prefetched.pop(index, None))
+                result = self.guard.observe(call.name, call.arguments, result)
                 if index == len(calls) - 1 and self._todo_only_round(calls):
                     result = f"{result}\n\n{TODO_PAIR_HINT}"
                     self.on_event("todo_pair_hint", {"calls": len(calls)})

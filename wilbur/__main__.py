@@ -56,7 +56,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="stay in $HOME instead of returning to the last project")
     parser.add_argument("--url", help="Ollama base URL")
     parser.add_argument("--backend", choices=BACKENDS,
-                        help="model backend: ollama (default) or fake (scripted "
+                        help="model backend: ollama (default), openai (an OpenAI-compatible "
+                             "server at base_url: llama.cpp, vLLM, SGLang) or fake (scripted "
                              "replies from --fake-script, no model; for tests)")
     parser.add_argument("--fake-script", metavar="FILE",
                         help="JSON script of replies for --backend fake")
@@ -110,11 +111,16 @@ def main(argv: list[str] | None = None) -> int:
         if backend == "fake":
             print("fake backend: no models (scripted replies only)")
             return 0
+        if backend == "openai":
+            from .backend_openai import list_models as _openai_models, read_api_key
+            for name in _openai_models(config.base_url, read_api_key(config.openai_api_key_file)):
+                print(name)
+            return 0
         return _list_models(config)
 
     prompt = args.oneshot or (" ".join(args.prompt) if args.prompt else "")
     if prompt:
-        if backend != "fake" and not args.model:  # an explicit -m is never swapped
+        if backend == "ollama" and not args.model:  # an explicit -m is never swapped
             _oneshot_fallback(config)
         return _oneshot(config, args.cwd, prompt, auto=args.yes or bool(args.oneshot))
 
@@ -157,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"no saved session for {target}. --sessions lists what exists.")
             return 1
 
-    rc = None if backend == "fake" else _ensure_model(config, allow_fallback=not args.model)
+    rc = None if backend != "ollama" else _ensure_model(config, allow_fallback=not args.model)
     if rc is not None:
         return rc
 

@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import diagnostics
+from . import diagnostics, edit_match
 from .base import Approval, ToolContext, ToolResult, denial_message, outside_cwd
 
 HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
@@ -122,8 +122,8 @@ def parse_unified_diff(text: str) -> list[FilePatch]:
     return patches
 
 
-def _norm(line: str) -> str:
-    return " ".join(line.split())
+# The same whitespace-tolerant line key edit_file's fallback uses.
+_norm = edit_match.norm
 
 
 def _find_block(lines: list[str], block: list[str], hint: int) -> tuple[int, bool]:

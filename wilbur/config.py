@@ -25,11 +25,16 @@ _NOT_SAVED = ("backend", "fake_script")
 class Config:
     # --- model / endpoint ---
     base_url: str = "http://localhost:11434"
-    # "ollama" (the real thing) or "fake": scripted replies from `fake_script`
+    # "ollama" (the real thing, default), "openai" (see below) or "fake": scripted replies from `fake_script`
     # with no model at all (wilbur.fake_backend), for tests and scripted runs.
     # Never chosen automatically -- only by setting it here or --backend.
     backend: str = "ollama"
     fake_script: str = ""
+    # backend "openai" (ADR-0004 decision 3): `base_url` is an OpenAI-compatible
+    # server (llama.cpp llama-server, vLLM, SGLang) answering /v1/chat/completions.
+    # Its bearer token, if it needs one, is read from this 0600 file, never
+    # stored in config.json. Empty = no Authorization header.
+    openai_api_key_file: str = ""
     # Which card `nvidia-smi`'s per-row output the fit check reads -- the card
     # Ollama's `base_url` server will actually place a model on. 0 is the only
     # card on a single-GPU host; set alongside `base_url` when a second card
@@ -91,6 +96,9 @@ class Config:
     # tool-multi-patch: offer apply_patch (multi-file unified diff or edit
     # list, all or nothing). False = the tool is not in the registry.
     apply_patch_tool: bool = True
+    # tool-code-intel (Python first, stdlib ast): code_intel symbols /
+    # definition / references. Off by default until benched; True adds it.
+    code_intel_tool: bool = False
     # tool-git: offer git_status/git_diff/git_log/git_blame/git_commit/git_push.
     # False = none of them is in the registry (run_bash's git guard stays on).
     git_tools: bool = True
@@ -310,6 +318,13 @@ class Config:
     auto_approve: list[str] = field(default_factory=lambda: [
         "read_file", "list_files", "glob", "grep", "todo_write",
     ])
+    # wilbur.safety (prompt-injection-guard, outbound-action-policy): untrusted
+    # tool results are marked; destructive/outbound calls with arguments from
+    # them, and any outbound action (git push, upload, publish, mail) not
+    # matching an fnmatch pattern in outbound_allow, ask even in auto modes.
+    # False = the pre-guard behaviour.
+    safety_guard: bool = True
+    outbound_allow: list[str] = field(default_factory=list)
     denied_bash: list[str] = field(default_factory=lambda: [
         "rm -rf /", "mkfs", "dd if=", ":(){", "shutdown", "reboot",
     ])

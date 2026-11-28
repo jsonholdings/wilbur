@@ -27,6 +27,11 @@ def build_registry(include_task: bool = True, config: Any = None) -> dict[str, A
     if getattr(config, "apply_patch_tool", True):
         from .patch import ApplyPatch
         tools.insert(4, ApplyPatch())
+    # tool-code-intel: off by default until the M-bench shows fewer reads
+    # (BACKLOG done-when); turning it on adds one tool to the schema.
+    if getattr(config, "code_intel_tool", False):
+        from .code_intel import CodeIntel
+        tools.append(CodeIntel())
     # tool-git: structured status/diff/log/blame, path-limited commit, gated push.
     if getattr(config, "git_tools", True):
         from .git import git_tools
