@@ -156,7 +156,7 @@ def test_disabled_checker_is_not_run_or_listed(work, tmp_path):
     assert res.output == f"Created {work / 'c.py'} (1 lines)."
 
 
-@pytest.mark.skipif(not (shutil.which("cc") or shutil.which("gcc")) or shutil.which("clang-tidy"),
+@pytest.mark.skipif(bool(not (shutil.which("cc") or shutil.which("gcc")) or shutil.which("clang-tidy")),
                     reason="needs a C compiler and no clang-tidy")
 def test_real_c_compile_reports_syntax_error(work):
     ctx = _ctx(work)
