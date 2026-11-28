@@ -640,7 +640,11 @@ class Repl:
     # ---------------------------------------------------------------- #
 
     def _approve(self, tool: str, detail: str) -> Approval:
-        if self.approve_mode == "all":
+        # A push to a default branch (tools/gitguard.py) is always asked:
+        # neither approve-all nor an auto_approve entry covers it, and an
+        # "a" answer grants this push only (2.76.0, rule git_push_default).
+        always_ask = tool == "git_push_default"
+        if self.approve_mode == "all" and not always_ask:
             return Approval.GRANTED
         # auto-edit and auto_approve cover edits inside the working directory
         # only (tools/base.py OUTSIDE_CWD); one outside it is asked about.
@@ -648,7 +652,7 @@ class Repl:
         if (self.approve_mode == "auto-edit" and tool in EDIT_TOOLS
                 and inside):
             return Approval.GRANTED
-        if tool in self.config.auto_approve and (
+        if not always_ask and tool in self.config.auto_approve and (
                 inside or tool not in EDIT_TOOLS):
             return Approval.GRANTED
 
@@ -696,7 +700,8 @@ class Repl:
                 return Approval.UNAVAILABLE
             answer = answer_line.strip().lower()
             if answer == "a":
-                self.approve_mode = "all"
+                if not always_ask:
+                    self.approve_mode = "all"
                 return Approval.GRANTED
             if answer in {"y", "yes"}:
                 return Approval.GRANTED

@@ -74,6 +74,12 @@ def _run(monkeypatch, tmp_path, keep_unacted):
     config.num_ctx = NUM_CTX
     config.max_turns = 200
     config.compact_keep_unacted = keep_unacted
+    # The budget here was calibrated on the 2.75.0 tool set. The git and job
+    # tools (2.76.0) add ~3.1k chars of schema per call, which at 32k pushes
+    # this policy model into one extra re-read; the test pins the compaction
+    # policy, not the tool set (BACKLOG tool-schema-budget tracks the cost).
+    config.git_tools = False
+    config.background_jobs = False
     a = Agent(config, str(tmp_path), approve=lambda *_: Approval.GRANTED)
     a.run("fix the bug in each module")
     fixed = sum("FIXED" in (tmp_path / f"mod{i:02d}.py").read_text() for i in range(N_MODULES))

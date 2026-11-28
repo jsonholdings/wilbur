@@ -34,7 +34,10 @@ def test_fallback_factor_control(tmp_path, monkeypatch):
 def test_scoped_sigterm_exit_gets_no_cap_hint(tmp_path):
     if not contained.scope_available():
         pytest.skip("no user systemd scope here")
-    proc = contained.shell("kill -TERM $$", str(tmp_path), timeout=10, memory_max="200M")
+    # No kill-family shell command in tests (2026-11-27 incident): the process
+    # signals only its own PID through the os API.
+    self_term = f"{sys.executable} -c 'import os, signal; os.kill(os.getpid(), signal.SIGTERM)'"
+    proc = contained.shell(f"exec {self_term}", str(tmp_path), timeout=10, memory_max="200M")
     assert proc.returncode in (-15, 143)
     assert proc.oom_killed is False
     assert contained.oom_note(proc.returncode, "200M", "", proc.oom_killed) == ""

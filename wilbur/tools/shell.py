@@ -10,6 +10,7 @@ from typing import Any
 
 from ..inbox import DEFAULT_BOUND_S, is_wait_command, poll_interval
 from . import contained, hints
+from .gitguard import default_branch_push, git_refusal
 from .killguard import kill_refusal
 from .base import Approval, ToolContext, ToolResult, clamp, denial_message
 
@@ -64,6 +65,43 @@ def elevation_program(command: str) -> str | None:
     return None
 
 
+def command_preflight(command: str, ctx: ToolContext) -> tuple[ToolResult | None, bool]:
+    """The checks every shell command passes before its own approval: no
+    elevation, killguard, gitguard, the deny-list and the default-branch
+    push key. Shared by run_bash and job_start (tools/jobs.py), so a
+    background job cannot do what run_bash refuses.
+
+    Returns (refusal or None, approved): approved is True when the user
+    already granted this exact command under `git_push_default`, so the
+    caller does not ask a second time under run_bash."""
+    elevated = elevation_program(command)
+    if elevated:
+        return ToolResult(ELEVATION_REFUSAL.format(prog=elevated), is_error=True), False
+
+    refusal = kill_refusal(command) or git_refusal(command)
+    if refusal:
+        return ToolResult(refusal, is_error=True), False
+
+    lowered = command.lower()
+    for pattern in ctx.config.denied_bash:
+        if pattern.lower() in lowered:
+            return ToolResult(
+                f"Refused: command matches the deny-list entry {pattern!r}.",
+                is_error=True,
+            ), False
+
+    # A push to a default branch is asked under its own key, so approving
+    # run_bash (auto_approve, approve-all) never covers it (tools/gitguard.py,
+    # repl._approve). That one answer covers the whole command.
+    pushed = default_branch_push(command, str(ctx.cwd))
+    if pushed:
+        outcome = ctx.approve("git_push_default", f"push to DEFAULT branch {pushed}\n    $ {command}")
+        if outcome is not Approval.GRANTED:
+            return ToolResult(denial_message("push to a default branch", outcome), is_error=True), False
+        return None, True
+    return None, False
+
+
 class Bash:
     name = "run_bash"
     read_only = False
@@ -88,24 +126,12 @@ class Bash:
         if not command:
             return ToolResult("No command given.", is_error=True)
 
-        elevated = elevation_program(command)
-        if elevated:
-            return ToolResult(ELEVATION_REFUSAL.format(prog=elevated), is_error=True)
-
-        refusal = kill_refusal(command)
-        if refusal:
-            return ToolResult(refusal, is_error=True)
-
-        lowered = command.lower()
-        for pattern in ctx.config.denied_bash:
-            if pattern.lower() in lowered:
-                return ToolResult(
-                    f"Refused: command matches the deny-list entry {pattern!r}.",
-                    is_error=True,
-                )
+        blocked, approved = command_preflight(command, ctx)
+        if blocked is not None:
+            return blocked
 
         label = args.get("description") or command[:70]
-        outcome = ctx.approve("run_bash", f"{label}\n    $ {command}")
+        outcome = Approval.GRANTED if approved else ctx.approve("run_bash", f"{label}\n    $ {command}")
         if outcome is not Approval.GRANTED:
             return ToolResult(denial_message("command", outcome), is_error=True)
 

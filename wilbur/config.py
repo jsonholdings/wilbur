@@ -91,6 +91,21 @@ class Config:
     # tool-multi-patch: offer apply_patch (multi-file unified diff or edit
     # list, all or nothing). False = the tool is not in the registry.
     apply_patch_tool: bool = True
+    # tool-git: offer git_status/git_diff/git_log/git_blame/git_commit/git_push.
+    # False = none of them is in the registry (run_bash's git guard stays on).
+    git_tools: bool = True
+    # tool-background-jobs: offer job_start/job_status/job_output/job_stop.
+    # False = none of them is in the registry. jobs_max_running caps how many
+    # run at once; jobs_dir holds their logs ("" = WILBUR_JOBS_DIR or
+    # ~/.local/state/wilbur/jobs).
+    background_jobs: bool = True
+    jobs_max_running: int = 4
+    jobs_dir: str = ""
+    # Old job-log session dirs are pruned when a new one opens: a dir goes
+    # once it is outside the newest jobs_keep_sessions AND older than
+    # jobs_log_max_age_days (tools/jobs.py prune_job_logs).
+    jobs_keep_sessions: int = 10
+    jobs_log_max_age_days: float = 7.0
     diagnostics_timeout_s: float = 10.0
     diagnostics_max_lines: int = 40
     diagnostics_max_chars: int = 4000

@@ -27,6 +27,14 @@ def build_registry(include_task: bool = True, config: Any = None) -> dict[str, A
     if getattr(config, "apply_patch_tool", True):
         from .patch import ApplyPatch
         tools.insert(4, ApplyPatch())
+    # tool-git: structured status/diff/log/blame, path-limited commit, gated push.
+    if getattr(config, "git_tools", True):
+        from .git import git_tools
+        tools.extend(git_tools())
+    # tool-background-jobs: detached named jobs, stopped at session end.
+    if getattr(config, "background_jobs", True):
+        from .jobs import job_tools
+        tools.extend(job_tools(config))
     if include_task:
         from .task import Task
         tools.append(Task())

@@ -213,3 +213,28 @@ def test_pasted_approval_prompt_is_flagged():
 def test_ordinary_message_is_not_flagged():
     assert Repl._pasted_output_note("please fix the bug in foo.py") is None
     assert Repl._pasted_output_note("run the tests and tell me what fails") is None
+
+
+# --------------------------------------------- 2.76.0 rule git_push_default --
+
+def test_git_push_default_asks_even_in_approve_all(monkeypatch):
+    fake = _FakeRepl()
+    fake.approve_mode = "all"
+    fake.config.auto_approve = ["git_push_default", "run_bash"]
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    fake._approval_q.put("n")
+    assert Repl._approve(fake, "git_push_default", "push to DEFAULT branch origin main") \
+        is Approval.DENIED
+    # Control: approve-all still grants everything else without a prompt.
+    assert Repl._approve(fake, "run_bash", "x") is Approval.GRANTED
+    assert fake._approval_q.empty()
+
+
+def test_git_push_default_always_answer_grants_once_only(monkeypatch):
+    fake = _FakeRepl()
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    fake._approval_q.put("a")
+    assert Repl._approve(fake, "git_push_default", "push") is Approval.GRANTED
+    assert fake.approve_mode == "ask", "'a' on a default-branch push must not switch to approve-all"
+    fake._approval_q.put("n")
+    assert Repl._approve(fake, "git_push_default", "push") is Approval.DENIED
