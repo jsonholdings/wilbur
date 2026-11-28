@@ -70,6 +70,7 @@ HELP = """  Model
   /keepgoing [on|off]  auto-continue a multi-item prompt between items (default on)
   /compact          summarise older history now (shows tokens before -> after)
   /clear            start a fresh conversation
+  /rewind [n] [code|chat]  list turns, or restore files and/or conversation to before turn n
   /cost             tokens and timing for this session
   /cd <dir>         move the session to another project directory (reloads its WILBUR.md)
   /memory [show|forget <name>]  this project's remembered facts and last session summary
@@ -87,7 +88,7 @@ HELP = """  Model
 
 _SLASH_COMMANDS = (
     "/model", "/search", "/pull", "/context", "/turns", "/continue", "/retry", "/compact", "/tools",
-    "/approve", "/team", "/loop", "/keepgoing", "/clear", "/cost", "/cd", "/memory", "/queue", "/queue clear", "/agents",
+    "/approve", "/team", "/loop", "/keepgoing", "/clear", "/rewind", "/cost", "/cd", "/memory", "/queue", "/queue clear", "/agents",
     "/expand", "/thinking", "/help", "/restart", "/exit",
 )
 
@@ -1559,6 +1560,10 @@ class Repl:
             self.session_id = self.sessions.new_id(self.cwd)
             self.agent = self._new_agent()
             print(ui.success("conversation cleared (new session, plan and ledger reset)"))
+        elif cmd == "/rewind":
+            from .checkpoints import rewind_command
+            for text in rewind_command(self.agent, arg):
+                print(ui.notice(text))
         elif cmd == "/cost":
             s = self.stats
             rate = s["out_tokens"] / s["seconds"] if s["seconds"] else 0

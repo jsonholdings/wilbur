@@ -78,6 +78,10 @@ def main(argv: list[str] | None = None) -> int:
                              "can never pick it up again (see --sessions for ids)")
     parser.add_argument("--json", action="store_true",
                         help="with --sessions, emit machine-readable JSON")
+    parser.add_argument("--output-format", choices=("text", "json", "stream-json"),
+                        default="text",
+                        help="one-shot output: text (default), json (one object at the end) "
+                             "or stream-json (one object per line); exit codes in wilbur/headless.py")
     parser.add_argument("--version", action="version", version=f"wilbur {__version__}")
     args = parser.parse_args(argv)
 
@@ -100,6 +104,9 @@ def main(argv: list[str] | None = None) -> int:
         backend = check_backend(config)
     except FakeBackendError as exc:
         print(ui.error(str(exc)), file=sys.stderr)
+        if args.output_format != "text":
+            from . import headless
+            return headless.setup_error(str(exc))
         return 2
     if backend == "fake":
         # Loud on every run: a config.json left on `fake` must never pass for
@@ -122,6 +129,10 @@ def main(argv: list[str] | None = None) -> int:
     if prompt:
         if backend == "ollama" and not args.model:  # an explicit -m is never swapped
             _oneshot_fallback(config)
+        if args.output_format != "text":
+            return _oneshot_headless(config, args.cwd, prompt,
+                                     auto=args.yes or bool(args.oneshot),
+                                     fmt=args.output_format)
         return _oneshot(config, args.cwd, prompt, auto=args.yes or bool(args.oneshot))
 
     if args.forget:
@@ -384,6 +395,36 @@ def _oneshot(config: Config, cwd: str, prompt: str, auto: bool) -> int:
         sessions.save(session_id, cwd, agent.messages, agent.state, config.model)
     print(reply)
     return 0
+
+
+def _oneshot_headless(config: Config, cwd: str, prompt: str, auto: bool, fmt: str) -> int:
+    """`-p --output-format json|stream-json`: same run as _oneshot, but stdout
+    is JSON only (headless.py documents the shape and the exit codes)."""
+    from . import headless
+    from . import session as sessions
+    recorder = headless.HeadlessRecorder(fmt)
+    try:
+        agent = Agent(
+            config, cwd,
+            approve=lambda tool, detail: Approval.GRANTED if auto else Approval.DENIED,
+            on_event=recorder.on_event,
+            system_extra=_global_instructions(),
+        )
+    except FakeBackendError as exc:  # e.g. the script file is missing
+        print(ui.error(str(exc)), file=sys.stderr)
+        return headless.setup_error(str(exc))
+    session_id = sessions.new_id(cwd)
+    reply, code, error = "", headless.EXIT_OK, None
+    try:
+        reply = agent.run(prompt)
+    except KeyboardInterrupt:
+        code, error = headless.EXIT_INTERRUPTED, "interrupted"
+    except Exception as exc:
+        code, error = headless.EXIT_ERROR, f"{type(exc).__name__}: {exc}"
+    finally:
+        sessions.save(session_id, cwd, agent.messages, agent.state, config.model)
+    return recorder.finish(result=reply or "", exit_code=code, session_id=session_id,
+                           model=config.model, error=error)
 
 
 def _print_event(kind: str, data: dict) -> None:

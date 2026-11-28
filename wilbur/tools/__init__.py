@@ -40,6 +40,10 @@ def build_registry(include_task: bool = True, config: Any = None) -> dict[str, A
     if getattr(config, "background_jobs", True):
         from .jobs import job_tools
         tools.extend(job_tools(config))
+    # headless-browser-tool: offered only while the switch is on (default off).
+    if getattr(config, "browser_tools", False):
+        from .browser import build_browser_tools
+        tools.extend(build_browser_tools())
     if include_task:
         from .task import Task
         tools.append(Task())

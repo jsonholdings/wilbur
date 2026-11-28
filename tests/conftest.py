@@ -37,6 +37,7 @@ atexit.register(shutil.rmtree, _TEST_WILBUR_HOME, True)
 os.environ["WILBUR_CONFIG"] = str(_TEST_WILBUR_HOME / "config.json")
 os.environ["WILBUR_SESSIONS"] = str(_TEST_WILBUR_HOME / "sessions")
 os.environ["WILBUR_HISTORY"] = str(_TEST_WILBUR_HOME / "history")
+os.environ["WILBUR_CHECKPOINTS"] = str(_TEST_WILBUR_HOME / "checkpoints")
 os.environ["WILBUR_USER_SKILLS_DIR"] = str(_TEST_WILBUR_HOME / "skills")
 # 2.52.0: the global ~/.config/wilbur/WILBUR.md and the last-project record
 # are real files on the owner machine; the suite must never read or write them.

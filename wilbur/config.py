@@ -123,6 +123,9 @@ class Config:
     # MemoryMax, swap 0). A model-written infinite allocation hung pop-os
     # on 2026-11-23; see wilbur/tools/contained.py.
     tool_memory_max: str = "8G"
+    # run_tests runs the tests that import the changed files first (static
+    # import graph, wilbur/impact.py), then the full suite. False = old behaviour.
+    test_impact: bool = True
 
     # --- agent loop ---
     max_turns: int = 60               # tool-call rounds per user message
@@ -175,9 +178,20 @@ class Config:
     # "native" is the 2.62.0 policy (note retry only).
     tool_call_mode: str = "auto"
     critic_pass: bool = False         # opt-in: one extra model call reviews each write
+    checkpoints: bool = True          # snapshot files before each write, per user turn; /rewind (wilbur.checkpoints)
+    checkpoints_max_mb: int = 200     # per-project cap on checkpoint storage; oldest turns pruned first
     tool_hints: bool = True           # one-time steer when a call took the expensive road (2.41.0)
     image_generation: bool = False    # opt-in generate_image tool (runs through gpu-queue)
     image_model: str = "qwen-image-2512"  # or "qwen-image-2.1" (research-only licence)
+    # headless-browser-tool: opt-in browser_* tools (Playwright in the pinned
+    # jh-wilbur-browser container, containers/browser). Page text is untrusted.
+    browser_tools: bool = False
+    browser_image: str = "jh-wilbur-browser:1.63.0"
+    browser_allow: list[str] = field(default_factory=list)  # hosts/CIDRs exempt from the LAN refusal
+    browser_network: str = "bridge"   # docker network; "host" is refused
+    browser_timeout: int = 20         # seconds per call (max 120)
+    browser_max_chars: int = 12000    # page text returned to the model
+    browser_max_page_bytes: int = 5_000_000  # any response body larger is aborted
     # A subagent's own tool-round budget, independent of the parent's
     # `max_turns`. Sharing the parent's (often much larger) budget let a
     # runaway subagent burn the wall-clock timeout above without ever

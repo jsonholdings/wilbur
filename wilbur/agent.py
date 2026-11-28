@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 import time
@@ -287,6 +288,8 @@ class Agent:
         # A typed line is not a keep-going nudge: the runaway-output streak
         # starts over (2.61.0, wilbur-2400-fastfollow).
         self._big_content_streak = 0
+        # The next run() opens a checkpoint turn (wilbur.checkpoints).
+        self._checkpoint_pending = True
 
     def begin_task(self) -> None:
         """A new task (a `wilbur loop` goal) on this Agent: on top of a fresh
@@ -300,6 +303,9 @@ class Agent:
         # turns re-read it from state, not from a compacted transcript.
         if not self.state.objective:
             self.state.objective = user_input
+        if getattr(self, "_checkpoint_pending", False):
+            self._checkpoint_pending = False
+            self._begin_checkpoint(user_input)
         self.messages.append({"role": "user", "content": user_input})
         from .eventlog import new_run_id
         self.run_id, self._log_round = new_run_id(), 0
@@ -814,6 +820,51 @@ class Agent:
         else:
             self.messages.insert(0, {"role": "system", "content": system})
 
+    def _begin_checkpoint(self, user_input: str) -> None:
+        """Open this user turn's checkpoint (/rewind). Never costs the run."""
+        from .checkpoints import store_for
+        try:
+            store = store_for(self.config, str(self.ctx.cwd))
+            if store is not None:
+                store.begin_turn(user_input, len(self.messages))
+        except Exception as exc:  # noqa: BLE001 -- a checkpoint failure must not stop work
+            self.log_event("checkpoint_error", {"error": str(exc)})
+
+    def _checkpoint_before_write(self, call: ToolCall) -> list[str]:
+        """Snapshot every file a write call names before it runs. Returns the
+        paths this call newly recorded, for _checkpoint_after_write."""
+        from .checkpoints import store_for
+        recorded: list[str] = []
+        try:
+            store = store_for(self.config, str(self.ctx.cwd))
+            if store is None:
+                return recorded
+            for raw in written_paths(call.name, call.arguments or {}):
+                path = os.path.expanduser(raw)
+                if not os.path.isabs(path):
+                    path = os.path.join(str(self.ctx.cwd), path)
+                if store.before_write(path):
+                    recorded.append(path)
+        except Exception as exc:  # noqa: BLE001
+            self.log_event("checkpoint_error", {"error": str(exc)})
+        return recorded
+
+    def _checkpoint_after_write(self, recorded: list[str]) -> None:
+        """Approval runs inside tool.run, after the snapshot. A refused or
+        failed write leaves its file untouched, so drop the snapshot this call
+        took rather than let /rewind list a file the turn never changed."""
+        if not recorded:
+            return
+        from .checkpoints import store_for
+        try:
+            store = store_for(self.config, str(self.ctx.cwd))
+            if store is None:
+                return
+            for path in recorded:
+                store.forget_if_unchanged(path)
+        except Exception as exc:  # noqa: BLE001
+            self.log_event("checkpoint_error", {"error": str(exc)})
+
     def _execute_tool(self, call: ToolCall, prefetched: Future | None = None) -> str:
         tool = self.registry.get(call.name)
         signature = f"{call.name}({self._arg_signature(call)})"
@@ -845,7 +896,12 @@ class Agent:
                 result, seconds = prefetched.result()
                 started = time.time() - seconds
             else:
-                result = tool.run(call.arguments, self.ctx)
+                recorded = (self._checkpoint_before_write(call)
+                            if call.name in WRITE_TOOLS else [])
+                try:
+                    result = tool.run(call.arguments, self.ctx)
+                finally:
+                    self._checkpoint_after_write(recorded)
         except KeyError as exc:
             result_text = (f"Missing required argument {exc} for {call.name}. "
                            f"Schema: {json.dumps(tool.schema)}")

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from . import contained
+from .. import impact
 from .base import Approval, ToolContext, ToolResult, clamp, denial_message
 
 
@@ -230,12 +231,36 @@ class RunTests:
                     is_error=True,
                 )
 
+        first_files: list[Path] = []
+        if (framework == "pytest" and not args.get("path")
+                and getattr(ctx.config, "test_impact", True)):
+            # `changed` is accepted but kept out of the schema: git's uncommitted
+            # files are the default, and every schema token is paid each round
+            # (tests/test_compact_round_overflow.py sits on that budget).
+            first_files = _impact_selection(root, args.get("changed"))
+
         label = command[:70]
-        outcome = ctx.approve("run_tests", f"{label}\n    $ {command}")
+        shown = command
+        if first_files:
+            shown = f"{_pytest_files_command(first_files, root)} && {command}"
+        outcome = ctx.approve("run_tests", f"{label}\n    $ {shown}")
         if outcome is not Approval.GRANTED:
             return ToolResult(denial_message("test run", outcome), is_error=True)
 
         memory_max = getattr(ctx.config, "tool_memory_max", contained.DEFAULT_MEMORY_MAX)
+        impact_note = ""
+        if first_files:
+            first = _run_first(first_files, root, timeout, memory_max)
+            if isinstance(first, ToolResult):
+                return first
+            first_text, first_ok = first
+            if not first_ok:
+                text = (f"impact: {len(first_files)} test file(s) covering your changes FAILED "
+                        f"(full suite not run yet; fix these, then run_tests again)\n{first_text}")
+                return ToolResult(clamp(text.strip(), ctx.config.max_tool_output_chars,
+                                        ctx.config.max_tool_output_lines), is_error=True)
+            impact_note = (f"impact: {len(first_files)} test file(s) covering your changes "
+                           f"passed first; full suite follows\n")
         try:
             proc = contained.shell(command, str(root), timeout, memory_max)
         except contained.Timeout:
@@ -261,6 +286,54 @@ class RunTests:
         else:
             text = _format_custom_summary(framework, body.strip(), proc.returncode, str(root))
 
-        text = clamp(text.strip(), ctx.config.max_tool_output_chars,
+        text = clamp((impact_note + text).strip(), ctx.config.max_tool_output_chars,
                      ctx.config.max_tool_output_lines)
         return ToolResult(text, is_error=proc.returncode != 0)
+
+
+def _impact_selection(root: Path, changed_arg: Any) -> list[Path]:
+    """Test files covering the changed files; [] means run only the full suite."""
+    if isinstance(changed_arg, list) and changed_arg:
+        changed = [Path(str(c)) if Path(str(c)).is_absolute() else root / str(c)
+                   for c in changed_arg]
+    else:
+        changed = impact.changed_files(root)
+    if not changed:
+        return []
+    return impact.impacted_tests(root, changed) or []
+
+
+def _pytest_files_command(files: list[Path], root: Path, junit: Path | None = None) -> str:
+    rels = []
+    for f in files:
+        try:
+            rels.append(str(f.relative_to(root.resolve())))
+        except ValueError:
+            rels.append(str(f))
+    command = "python3 -m pytest -q " + " ".join(rels)
+    return f"{command} --junitxml={junit}" if junit else command
+
+
+def _run_first(files: list[Path], root: Path, timeout: int,
+               memory_max: str) -> tuple[str, bool] | ToolResult:
+    tmp_dir = tempfile.mkdtemp(prefix="wilbur-junit-")
+    junit = Path(tmp_dir) / "junit.xml"
+    try:
+        try:
+            proc = contained.shell(_pytest_files_command(files, root, junit), str(root),
+                                   timeout, memory_max)
+        except contained.Timeout:
+            return ToolResult(f"Impacted tests timed out after {timeout}s. "
+                              f"{contained.timeout_hint(timeout)}", is_error=True)
+        try:
+            text = _format_pytest_summary(_parse_junit(junit), proc.returncode)
+        except (ET.ParseError, OSError):
+            body = (proc.stdout or "") + (proc.stderr or "")
+            text = f"tests: unable to parse JUnit report (pytest)\nexit {proc.returncode}\n\n{body.strip()}"
+        return text, proc.returncode == 0
+    finally:
+        try:
+            junit.unlink(missing_ok=True)
+            junit.parent.rmdir()
+        except OSError:
+            pass
